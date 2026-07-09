@@ -62,7 +62,7 @@ export default async function ClosetItemDetailPage({
   }
 
   return (
-    <div className="px-4 pt-6 pb-6">
+    <div className="h-full overflow-y-auto overscroll-contain px-4 pt-6 pb-6">
       <header className="mb-4 flex items-center gap-3">
         <Link
           href="/closet"

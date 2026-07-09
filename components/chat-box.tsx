@@ -12,7 +12,12 @@ import {
   regenerateRecommendation,
   type RecommendationResult,
 } from "@/lib/actions/recommendation";
-import { MessageList, type ChatMessage } from "@/components/message-list";
+import {
+  CHAT_MESSAGES_STORAGE_KEY,
+  MessageList,
+  parseStoredChatMessages,
+  type ChatMessage,
+} from "@/components/message-list";
 
 function createId() {
   return crypto.randomUUID();
@@ -22,6 +27,7 @@ export function ChatBox() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [isHydrated, setIsHydrated] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -44,6 +50,48 @@ export function ChatBox() {
   useEffect(() => {
     resizeTextarea();
   }, [input, resizeTextarea]);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(CHAT_MESSAGES_STORAGE_KEY);
+      if (!raw) return;
+
+      const restored = parseStoredChatMessages(raw);
+      if (restored === null) {
+        localStorage.removeItem(CHAT_MESSAGES_STORAGE_KEY);
+        return;
+      }
+
+      setMessages(restored);
+    } catch {
+      localStorage.removeItem(CHAT_MESSAGES_STORAGE_KEY);
+    } finally {
+      setIsHydrated(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isHydrated) return;
+
+    try {
+      if (messages.length === 0) {
+        localStorage.removeItem(CHAT_MESSAGES_STORAGE_KEY);
+        return;
+      }
+
+      localStorage.setItem(
+        CHAT_MESSAGES_STORAGE_KEY,
+        JSON.stringify(messages)
+      );
+    } catch (error) {
+      console.error("Failed to persist chat messages:", error);
+    }
+  }, [messages, isHydrated]);
+
+  useEffect(() => {
+    if (!isHydrated || messages.length === 0) return;
+    scrollToBottom();
+  }, [isHydrated, messages.length, scrollToBottom]);
 
   const appendAssistantMessage = (content: string, isError = false) => {
     setMessages((prev) => [
@@ -90,10 +138,6 @@ export function ChatBox() {
     handleSend(input);
   };
 
-  const handleQuickQuestion = (question: string) => {
-    handleSend(question);
-  };
-
   const handleRegenerate = async (recommendation: RecommendationResult) => {
     if (isLoading) return;
 
@@ -123,6 +167,19 @@ export function ChatBox() {
     scrollToBottom();
   };
 
+  const handleQuickQuestion = (question: string) => {
+    handleSend(question);
+  };
+
+  const handleClearChat = () => {
+    setMessages([]);
+    try {
+      localStorage.removeItem(CHAT_MESSAGES_STORAGE_KEY);
+    } catch (error) {
+      console.error("Failed to clear chat messages:", error);
+    }
+  };
+
   const showClosetHint = messages.some(
     (m) =>
       m.role === "assistant" &&
@@ -132,10 +189,24 @@ export function ChatBox() {
   return (
     <div className="flex h-full min-h-0 flex-col">
       <header className="shrink-0 border-b border-border/50 px-4 py-4 text-center">
-        <h1 className="text-lg font-semibold tracking-tight text-foreground">
-          {PAGE_COPY.home.headline}
-        </h1>
-        <p className="mt-1 text-sm text-muted">{PAGE_COPY.home.subtitle}</p>
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0 flex-1 text-center">
+            <h1 className="text-lg font-semibold tracking-tight text-foreground">
+              {PAGE_COPY.home.headline}
+            </h1>
+            <p className="mt-1 text-sm text-muted">{PAGE_COPY.home.subtitle}</p>
+          </div>
+          {messages.length > 0 && (
+            <button
+              type="button"
+              onClick={handleClearChat}
+              disabled={isLoading}
+              className="shrink-0 rounded-full px-3 py-1.5 text-xs text-muted transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"
+            >
+              清空对话
+            </button>
+          )}
+        </div>
       </header>
 
       <div

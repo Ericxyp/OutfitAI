@@ -179,7 +179,9 @@ export async function createClosetItem(
   redirect(`/closet/${data.id}`);
 }
 
-export async function deleteClosetItem(id: string) {
+export async function deleteClosetItem(
+  id: string
+): Promise<{ error?: string } | void> {
   const supabase = await createClient();
   const {
     data: { user },
@@ -203,11 +205,32 @@ export async function deleteClosetItem(id: string) {
   if (item.image_url) {
     const storagePath = getStoragePathFromUrl(item.image_url);
     if (storagePath) {
-      await supabase.storage.from(CLOSET_STORAGE_BUCKET).remove([storagePath]);
+      const { error: storageError } = await supabase.storage
+        .from(CLOSET_STORAGE_BUCKET)
+        .remove([storagePath]);
+
+      if (storageError) {
+        console.error("Supabase storage delete failed:", {
+          bucket: CLOSET_STORAGE_BUCKET,
+          storagePath,
+          itemId: id,
+          message: storageError.message,
+          error: storageError,
+        });
+      }
     }
   }
 
-  await supabase.from("closet_items").delete().eq("id", id).eq("user_id", user.id);
+  const { error: deleteError } = await supabase
+    .from("closet_items")
+    .delete()
+    .eq("id", id)
+    .eq("user_id", user.id);
+
+  if (deleteError) {
+    console.error("deleteClosetItem database error:", deleteError);
+    return { error: "删除失败，请稍后重试" };
+  }
 
   revalidatePath("/closet");
   revalidatePath("/profile");
