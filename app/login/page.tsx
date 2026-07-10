@@ -29,40 +29,6 @@ export default function LoginPage({
           <LoginFormWrapper searchParams={searchParams} />
         </Suspense>
       </div>
-
-      <aside className="mx-auto mt-6 max-w-sm space-y-3 rounded-2xl bg-accent/50 px-4 py-3 ring-1 ring-border/40">
-        <div>
-          <p className="mb-1 text-xs font-medium text-foreground">
-            Supabase 邮件模板（必改一次）
-          </p>
-          <p className="text-xs leading-relaxed text-muted">
-            默认模板经 Supabase 中转并使用 PKCE，容易在邮件客户端里登录失败。请把 Magic
-            Link 模板改为直接跳转到本应用的 token 链接。
-          </p>
-        </div>
-        <div>
-          <p className="mb-1 text-xs font-medium text-foreground">操作步骤</p>
-          <ol className="list-decimal space-y-1 pl-4 text-xs leading-relaxed text-muted">
-            <li>
-              Supabase → Authentication → Email Templates →{" "}
-              <strong className="text-foreground">Magic Link</strong>
-            </li>
-            <li>
-              Authentication → URL Configuration：Site URL 设为{" "}
-              <code className="rounded bg-background px-1">http://localhost:3000</code>
-            </li>
-            <li>Body 替换为下方模板，Save 后重新获取登录链接</li>
-          </ol>
-        </div>
-        <div>
-          <p className="mb-1 text-xs font-medium text-foreground">Body 模板（复制粘贴）</p>
-          <pre className="overflow-x-auto rounded-xl bg-background p-3 text-[11px] leading-relaxed text-foreground ring-1 ring-border/60">
-{`<h2>登录 OutfitAI</h2>
-<p>点击下方按钮登录，链接仅可使用一次。</p>
-<p><a href="{{ .SiteURL }}/auth/callback?token_hash={{ .TokenHash }}&type=magiclink">Sign in</a></p>`}
-          </pre>
-        </div>
-      </aside>
     </div>
   );
 }

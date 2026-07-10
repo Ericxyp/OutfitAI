@@ -3,6 +3,7 @@
 import type { RecommendationResult } from "@/lib/actions/recommendation";
 import { PAGE_COPY } from "@/lib/constants";
 import { FeedbackButtons } from "@/components/feedback-buttons";
+import { sanitizeVisibleAiText } from "@/lib/text/sanitize-visible-ai-text";
 
 export function OutfitResultCard({
   recommendation,
@@ -13,14 +14,21 @@ export function OutfitResultCard({
   onRegenerate: () => void;
   isRegenerating?: boolean;
 }) {
+  const title = sanitizeVisibleAiText(recommendation.title);
+  const occasion = sanitizeVisibleAiText(recommendation.occasion);
+  const summary = sanitizeVisibleAiText(recommendation.summary);
+  const reasoning = sanitizeVisibleAiText(recommendation.reasoning);
+  const styleTags = recommendation.styleTags.map(sanitizeVisibleAiText);
+  const alternatives = recommendation.alternatives.map(sanitizeVisibleAiText);
+
   return (
     <div className="w-full min-w-0 overflow-hidden rounded-2xl bg-card shadow-sm ring-1 ring-border/60">
       <div className="px-4 pt-4 pb-3">
         <p className="text-base font-semibold leading-snug text-foreground">
-          {recommendation.title}
+          {title}
         </p>
         <p className="mt-1 text-xs text-muted">
-          {PAGE_COPY.outfit.occasion} · {recommendation.occasion}
+          {PAGE_COPY.outfit.occasion} · {occasion}
         </p>
       </div>
 
@@ -57,20 +65,20 @@ export function OutfitResultCard({
         <div>
           <p className="mb-1 text-xs text-muted">{PAGE_COPY.outfit.summary}</p>
           <p className="text-sm leading-relaxed text-foreground">
-            {recommendation.summary}
+            {summary}
           </p>
         </div>
 
         <div>
           <p className="mb-1 text-xs text-muted">{PAGE_COPY.outfit.reasoning}</p>
           <p className="text-sm leading-relaxed text-foreground/90">
-            {recommendation.reasoning}
+            {reasoning}
           </p>
         </div>
 
-        {recommendation.styleTags.length > 0 && (
+        {styleTags.length > 0 && (
           <div className="flex flex-wrap gap-1.5">
-            {recommendation.styleTags.map((tag) => (
+            {styleTags.map((tag) => (
               <span
                 key={tag}
                 className="rounded-full bg-accent px-2.5 py-1 text-xs text-foreground"
@@ -81,13 +89,13 @@ export function OutfitResultCard({
           </div>
         )}
 
-        {recommendation.alternatives.length > 0 && (
+        {alternatives.length > 0 && (
           <div>
             <p className="mb-1.5 text-xs text-muted">
               {PAGE_COPY.outfit.alternatives}
             </p>
             <ul className="space-y-1">
-              {recommendation.alternatives.map((alt, i) => (
+              {alternatives.map((alt, i) => (
                 <li key={i} className="text-sm leading-relaxed text-foreground/90">
                   · {alt}
                 </li>

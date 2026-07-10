@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { updateStyleProfileFromFeedback } from "@/lib/memory/update-style-profile";
 import { createClient } from "@/lib/supabase/server";
 import type { ClosetItem, FeedbackRating } from "@/types/database";
 
@@ -95,6 +96,16 @@ export async function submitFeedback(
 
   revalidatePath("/profile");
   revalidatePath("/saved");
+
+  try {
+    await updateStyleProfileFromFeedback({
+      userId: user.id,
+      recommendationId,
+      rating,
+    });
+  } catch (error) {
+    console.error("[feedback] style profile update failed:", error);
+  }
 
   return { success: true, rating };
 }

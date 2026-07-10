@@ -156,6 +156,201 @@ export interface Database {
         };
         Relationships: [];
       };
+      user_style_profiles: {
+        Row: {
+          user_id: string;
+          preferred_styles: string[];
+          preferred_colors: string[];
+          preferred_occasions: string[];
+          avoid_styles: string[];
+          avoid_colors: string[];
+          favorite_item_ids: string[];
+          disliked_item_ids: string[];
+          style_summary: string | null;
+          feedback_count: number;
+          updated_at: string;
+        };
+        Insert: {
+          user_id: string;
+          preferred_styles?: string[];
+          preferred_colors?: string[];
+          preferred_occasions?: string[];
+          avoid_styles?: string[];
+          avoid_colors?: string[];
+          favorite_item_ids?: string[];
+          disliked_item_ids?: string[];
+          style_summary?: string | null;
+          feedback_count?: number;
+          updated_at?: string;
+        };
+        Update: {
+          user_id?: string;
+          preferred_styles?: string[];
+          preferred_colors?: string[];
+          preferred_occasions?: string[];
+          avoid_styles?: string[];
+          avoid_colors?: string[];
+          favorite_item_ids?: string[];
+          disliked_item_ids?: string[];
+          style_summary?: string | null;
+          feedback_count?: number;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+      user_personal_profiles: {
+        Row: {
+          user_id: string;
+          height_cm: number | null;
+          weight_kg: number | null;
+          age: number | null;
+          gender: string | null;
+          body_notes: string | null;
+          fit_goals: string[];
+          size_notes: string | null;
+          avoid_body_focus: string[];
+          updated_at: string;
+        };
+        Insert: {
+          user_id: string;
+          height_cm?: number | null;
+          weight_kg?: number | null;
+          age?: number | null;
+          gender?: string | null;
+          body_notes?: string | null;
+          fit_goals?: string[];
+          size_notes?: string | null;
+          avoid_body_focus?: string[];
+          updated_at?: string;
+        };
+        Update: {
+          user_id?: string;
+          height_cm?: number | null;
+          weight_kg?: number | null;
+          age?: number | null;
+          gender?: string | null;
+          body_notes?: string | null;
+          fit_goals?: string[];
+          size_notes?: string | null;
+          avoid_body_focus?: string[];
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+      travel_plans: {
+        Row: {
+          id: string;
+          user_id: string;
+          destination: string;
+          start_date: string | null;
+          days: number;
+          purpose: string | null;
+          style_preference: string | null;
+          weather_context: Json | null;
+          packing_list: Json | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          destination: string;
+          start_date?: string | null;
+          days: number;
+          purpose?: string | null;
+          style_preference?: string | null;
+          weather_context?: Json | null;
+          packing_list?: Json | null;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          user_id?: string;
+          destination?: string;
+          start_date?: string | null;
+          days?: number;
+          purpose?: string | null;
+          style_preference?: string | null;
+          weather_context?: Json | null;
+          packing_list?: Json | null;
+          created_at?: string;
+        };
+        Relationships: [];
+      };
+      travel_plan_days: {
+        Row: {
+          id: string;
+          plan_id: string;
+          day_index: number;
+          date: string | null;
+          title: string | null;
+          selected_item_ids: string[];
+          summary: string | null;
+          reasoning: string | null;
+          weather: Json | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          plan_id: string;
+          day_index: number;
+          date?: string | null;
+          title?: string | null;
+          selected_item_ids?: string[];
+          summary?: string | null;
+          reasoning?: string | null;
+          weather?: Json | null;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          plan_id?: string;
+          day_index?: number;
+          date?: string | null;
+          title?: string | null;
+          selected_item_ids?: string[];
+          summary?: string | null;
+          reasoning?: string | null;
+          weather?: Json | null;
+          created_at?: string;
+        };
+        Relationships: [];
+      };
+      shopping_checks: {
+        Row: {
+          id: string;
+          user_id: string;
+          product_image_url: string | null;
+          product_analysis: Json | null;
+          compatibility_score: number | null;
+          matched_item_ids: string[];
+          outfit_ideas: Json | null;
+          recommendation: string | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          product_image_url?: string | null;
+          product_analysis?: Json | null;
+          compatibility_score?: number | null;
+          matched_item_ids?: string[];
+          outfit_ideas?: Json | null;
+          recommendation?: string | null;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          user_id?: string;
+          product_image_url?: string | null;
+          product_analysis?: Json | null;
+          compatibility_score?: number | null;
+          matched_item_ids?: string[];
+          outfit_ideas?: Json | null;
+          recommendation?: string | null;
+          created_at?: string;
+        };
+        Relationships: [];
+      };
     };
     Views: Record<string, never>;
     Functions: Record<string, never>;
@@ -169,3 +364,12 @@ export type ClosetItem = Database["public"]["Tables"]["closet_items"]["Row"];
 export type OutfitRecommendation =
   Database["public"]["Tables"]["outfit_recommendations"]["Row"];
 export type Feedback = Database["public"]["Tables"]["feedback"]["Row"];
+export type UserStyleProfile =
+  Database["public"]["Tables"]["user_style_profiles"]["Row"];
+export type UserPersonalProfile =
+  Database["public"]["Tables"]["user_personal_profiles"]["Row"];
+export type TravelPlan = Database["public"]["Tables"]["travel_plans"]["Row"];
+export type TravelPlanDay =
+  Database["public"]["Tables"]["travel_plan_days"]["Row"];
+export type ShoppingCheck =
+  Database["public"]["Tables"]["shopping_checks"]["Row"];

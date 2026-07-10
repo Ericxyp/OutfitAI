@@ -18,9 +18,33 @@ import {
   parseStoredChatMessages,
   type ChatMessage,
 } from "@/components/message-list";
+import {
+  buildShoppingGuideMessage,
+  detectShoppingIntent,
+} from "@/lib/shopping-intent";
+import {
+  buildTravelGuideMessage,
+  detectTravelIntent,
+} from "@/lib/travel-intent";
+import type { LocationInput } from "@/types/weather";
 
 function createId() {
   return crypto.randomUUID();
+}
+
+type LocationStatus = "idle" | "loading" | "success" | "error";
+
+function getLocationButtonLabel(status: LocationStatus): string {
+  switch (status) {
+    case "loading":
+      return "定位中...";
+    case "success":
+      return "已使用当前位置";
+    case "error":
+      return "定位失败，仍可继续推荐";
+    default:
+      return "使用当前位置";
+  }
 }
 
 export function ChatBox() {
@@ -28,6 +52,8 @@ export function ChatBox() {
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isHydrated, setIsHydrated] = useState(false);
+  const [location, setLocation] = useState<LocationInput | null>(null);
+  const [locationStatus, setLocationStatus] = useState<LocationStatus>("idle");
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -105,15 +131,62 @@ export function ChatBox() {
     const trimmed = text.trim();
     if (!trimmed || isLoading) return;
 
+    const hasLocation =
+      location !== null &&
+      Number.isFinite(location.latitude) &&
+      Number.isFinite(location.longitude);
+
+    console.log("[ChatBox] send recommendation", {
+      hasLocation,
+      locationStatus,
+    });
+
     setMessages((prev) => [
       ...prev,
       { id: createId(), role: "user", content: trimmed },
     ]);
     setInput("");
-    setIsLoading(true);
     scrollToBottom();
 
-    const result = await generateRecommendation(trimmed);
+    const travelIntent = detectTravelIntent(trimmed);
+    if (travelIntent.isTravelPlan) {
+      const { content, actionHref } = buildTravelGuideMessage(travelIntent);
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: createId(),
+          role: "assistant",
+          content,
+          actionHref,
+          actionLabel: "去旅行穿搭规划",
+        },
+      ]);
+      scrollToBottom();
+      return;
+    }
+
+    const shoppingIntent = detectShoppingIntent(trimmed);
+    if (shoppingIntent.isShoppingCheck) {
+      const { content, actionHref } = buildShoppingGuideMessage();
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: createId(),
+          role: "assistant",
+          content,
+          actionHref,
+          actionLabel: "去购物助手",
+        },
+      ]);
+      scrollToBottom();
+      return;
+    }
+
+    setIsLoading(true);
+
+    const result = await generateRecommendation(trimmed, {
+      location: location ?? undefined,
+    });
 
     setIsLoading(false);
 
@@ -146,7 +219,8 @@ export function ChatBox() {
 
     const result = await regenerateRecommendation(
       recommendation.requestText,
-      recommendation.selectedItemIds
+      recommendation.selectedItemIds,
+      { location: location ?? undefined }
     );
 
     setIsLoading(false);
@@ -169,6 +243,39 @@ export function ChatBox() {
 
   const handleQuickQuestion = (question: string) => {
     handleSend(question);
+  };
+
+  const handleUseLocation = () => {
+    if (locationStatus === "loading" || isLoading) return;
+
+    if (!navigator.geolocation) {
+      setLocation(null);
+      setLocationStatus("error");
+      return;
+    }
+
+    setLocationStatus("loading");
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        setLocation({
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+        });
+        setLocationStatus("success");
+        console.log("[ChatBox] location acquired", { hasLocation: true });
+      },
+      () => {
+        setLocation(null);
+        setLocationStatus("error");
+        console.log("[ChatBox] location failed", { hasLocation: false });
+      },
+      {
+        enableHighAccuracy: false,
+        timeout: 10000,
+        maximumAge: 300000,
+      }
+    );
   };
 
   const handleClearChat = () => {
@@ -234,7 +341,17 @@ export function ChatBox() {
         )}
 
         {messages.length === 0 && !isLoading && (
-          <div className="mb-3 flex gap-2 overflow-x-auto pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <>
+            <Link
+              href="/shopping"
+              className="mb-3 flex items-center justify-between rounded-2xl bg-card px-4 py-3 ring-1 ring-border/60 transition-colors hover:bg-accent"
+            >
+              <span className="text-sm text-foreground">
+                想买一件衣服？上传商品图，帮你看值不值得买
+              </span>
+              <span className="shrink-0 text-sm font-medium">去购物助手 →</span>
+            </Link>
+            <div className="mb-3 flex gap-2 overflow-x-auto pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             {QUICK_QUESTIONS.map((question) => (
               <button
                 key={question}
@@ -246,8 +363,26 @@ export function ChatBox() {
                 {question}
               </button>
             ))}
-          </div>
+            </div>
+          </>
         )}
+
+        <div className="mb-3">
+          <button
+            type="button"
+            onClick={handleUseLocation}
+            disabled={isLoading || locationStatus === "loading"}
+            className={`rounded-full px-3.5 py-2 text-sm ring-1 transition-colors disabled:opacity-60 ${
+              locationStatus === "success"
+                ? "bg-accent text-foreground ring-border/80"
+                : locationStatus === "error"
+                  ? "bg-card text-muted ring-border/80 hover:bg-accent hover:text-foreground"
+                  : "bg-card text-foreground ring-border/80 hover:bg-accent"
+            }`}
+          >
+            {getLocationButtonLabel(locationStatus)}
+          </button>
+        </div>
 
         <form onSubmit={handleSubmit} className="flex items-end gap-2">
           <div className="min-w-0 flex-1 rounded-2xl bg-card px-4 py-2.5 ring-1 ring-border/80">

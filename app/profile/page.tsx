@@ -9,7 +9,10 @@ import { DemoBanner, PageHeader } from "@/components/ui/page-states";
 
 const MENU_ITEMS = [
   { label: "演示指南", href: "/demo" },
-  { label: PAGE_COPY.profile.preferences, href: "#" },
+  { label: "旅行穿搭规划", href: "/travel" },
+  { label: "购物助手", href: "/shopping" },
+  { label: "个人信息", href: "/profile/personal" },
+  { label: PAGE_COPY.profile.preferences, href: "/profile/style" },
   { label: PAGE_COPY.profile.settings, href: "#" },
 ] as const;
 
@@ -51,6 +54,12 @@ export default async function ProfilePage() {
     .eq("user_id", user.id)
     .eq("rating", "like");
 
+  const { data: styleProfile } = await supabase
+    .from("user_style_profiles")
+    .select("*")
+    .eq("user_id", user.id)
+    .maybeSingle();
+
   const displayName =
     profile?.display_name ||
     user.user_metadata?.display_name ||
@@ -68,6 +77,25 @@ export default async function ProfilePage() {
   ];
 
   const demoHint = PAGE_COPY.profile.demoHint(closetTotal);
+
+  const hasStyleProfile =
+    styleProfile !== null && styleProfile.feedback_count > 0;
+
+  function renderTagList(tags: string[]) {
+    if (tags.length === 0) return null;
+    return (
+      <div className="flex flex-wrap gap-1.5">
+        {tags.map((tag) => (
+          <span
+            key={tag}
+            className="rounded-full bg-background px-2.5 py-1 text-xs text-foreground ring-1 ring-border/80"
+          >
+            {tag}
+          </span>
+        ))}
+      </div>
+    );
+  }
 
   return (
     <div className="h-full overflow-y-auto overscroll-contain px-4 pt-6 pb-4">
@@ -117,6 +145,71 @@ export default async function ProfilePage() {
             </div>
           ))}
         </div>
+      </section>
+
+      <section className="mb-4 rounded-2xl bg-card p-5 shadow-sm ring-1 ring-border/60">
+        <h2 className="text-sm font-medium text-foreground">我的风格画像</h2>
+        {hasStyleProfile ? (
+          <div className="mt-4 space-y-4">
+            {styleProfile.preferred_styles.length > 0 && (
+              <div>
+                <p className="mb-2 text-xs text-muted">偏好风格</p>
+                {renderTagList(styleProfile.preferred_styles)}
+              </div>
+            )}
+            {styleProfile.preferred_colors.length > 0 && (
+              <div>
+                <p className="mb-2 text-xs text-muted">偏好颜色</p>
+                {renderTagList(styleProfile.preferred_colors)}
+              </div>
+            )}
+            {styleProfile.preferred_occasions.length > 0 && (
+              <div>
+                <p className="mb-2 text-xs text-muted">常用场景</p>
+                {renderTagList(styleProfile.preferred_occasions)}
+              </div>
+            )}
+            {(styleProfile.avoid_styles.length > 0 ||
+              styleProfile.avoid_colors.length > 0) && (
+              <div>
+                <p className="mb-2 text-xs text-muted">避免元素</p>
+                <div className="space-y-2">
+                  {styleProfile.avoid_styles.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {styleProfile.avoid_styles.map((tag) => (
+                        <span
+                          key={`avoid-style-${tag}`}
+                          className="rounded-full bg-red-50 px-2.5 py-1 text-xs text-red-600 ring-1 ring-red-100"
+                        >
+                          {tag}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  {styleProfile.avoid_colors.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {styleProfile.avoid_colors.map((tag) => (
+                        <span
+                          key={`avoid-color-${tag}`}
+                          className="rounded-full bg-red-50 px-2.5 py-1 text-xs text-red-600 ring-1 ring-red-100"
+                        >
+                          {tag}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+            <p className="text-xs text-muted">
+              已根据 {styleProfile.feedback_count} 次反馈学习你的风格偏好
+            </p>
+          </div>
+        ) : (
+          <p className="mt-3 text-sm leading-relaxed text-muted">
+            多收藏或反馈几套穿搭后，我会逐渐了解你的风格。
+          </p>
+        )}
       </section>
 
       <section className="overflow-hidden rounded-2xl bg-card shadow-sm ring-1 ring-border/60">

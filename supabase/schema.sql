@@ -186,6 +186,242 @@ create policy "feedback_delete_own"
   using (auth.uid() = user_id);
 
 -- ============================================================
+-- 5. user_style_profiles（Memory / 风格画像）
+-- ============================================================
+create table if not exists public.user_style_profiles (
+  user_id uuid primary key references auth.users (id) on delete cascade,
+  preferred_styles text[] not null default '{}',
+  preferred_colors text[] not null default '{}',
+  preferred_occasions text[] not null default '{}',
+  avoid_styles text[] not null default '{}',
+  avoid_colors text[] not null default '{}',
+  favorite_item_ids uuid[] not null default '{}',
+  disliked_item_ids uuid[] not null default '{}',
+  style_summary text,
+  feedback_count int not null default 0,
+  updated_at timestamptz not null default now()
+);
+
+alter table public.user_style_profiles enable row level security;
+
+drop policy if exists "user_style_profiles_select_own" on public.user_style_profiles;
+drop policy if exists "user_style_profiles_insert_own" on public.user_style_profiles;
+drop policy if exists "user_style_profiles_update_own" on public.user_style_profiles;
+drop policy if exists "user_style_profiles_delete_own" on public.user_style_profiles;
+
+create policy "user_style_profiles_select_own"
+  on public.user_style_profiles for select
+  using (auth.uid() = user_id);
+
+create policy "user_style_profiles_insert_own"
+  on public.user_style_profiles for insert
+  with check (auth.uid() = user_id);
+
+create policy "user_style_profiles_update_own"
+  on public.user_style_profiles for update
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+create policy "user_style_profiles_delete_own"
+  on public.user_style_profiles for delete
+  using (auth.uid() = user_id);
+
+-- ============================================================
+-- 5b. user_personal_profiles（个人信息 / 身体信息与穿衣目标）
+-- ============================================================
+create table if not exists public.user_personal_profiles (
+  user_id uuid primary key references auth.users (id) on delete cascade,
+  height_cm int,
+  weight_kg int,
+  age int,
+  gender text,
+  body_notes text,
+  fit_goals text[] not null default '{}',
+  size_notes text,
+  avoid_body_focus text[] not null default '{}',
+  updated_at timestamptz not null default now()
+);
+
+alter table public.user_personal_profiles enable row level security;
+
+drop policy if exists "user_personal_profiles_select_own" on public.user_personal_profiles;
+drop policy if exists "user_personal_profiles_insert_own" on public.user_personal_profiles;
+drop policy if exists "user_personal_profiles_update_own" on public.user_personal_profiles;
+drop policy if exists "user_personal_profiles_delete_own" on public.user_personal_profiles;
+
+create policy "user_personal_profiles_select_own"
+  on public.user_personal_profiles for select
+  using (auth.uid() = user_id);
+
+create policy "user_personal_profiles_insert_own"
+  on public.user_personal_profiles for insert
+  with check (auth.uid() = user_id);
+
+create policy "user_personal_profiles_update_own"
+  on public.user_personal_profiles for update
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+create policy "user_personal_profiles_delete_own"
+  on public.user_personal_profiles for delete
+  using (auth.uid() = user_id);
+
+-- ============================================================
+-- 6. travel_plans / travel_plan_days（旅行穿搭规划）
+-- ============================================================
+create table if not exists public.travel_plans (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users (id) on delete cascade,
+  destination text not null,
+  start_date date,
+  days int not null,
+  purpose text,
+  style_preference text,
+  weather_context jsonb,
+  packing_list jsonb,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists travel_plans_user_id_idx
+  on public.travel_plans (user_id);
+
+alter table public.travel_plans enable row level security;
+
+drop policy if exists "travel_plans_select_own" on public.travel_plans;
+drop policy if exists "travel_plans_insert_own" on public.travel_plans;
+drop policy if exists "travel_plans_update_own" on public.travel_plans;
+drop policy if exists "travel_plans_delete_own" on public.travel_plans;
+
+create policy "travel_plans_select_own"
+  on public.travel_plans for select
+  using (auth.uid() = user_id);
+
+create policy "travel_plans_insert_own"
+  on public.travel_plans for insert
+  with check (auth.uid() = user_id);
+
+create policy "travel_plans_update_own"
+  on public.travel_plans for update
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+create policy "travel_plans_delete_own"
+  on public.travel_plans for delete
+  using (auth.uid() = user_id);
+
+create table if not exists public.travel_plan_days (
+  id uuid primary key default gen_random_uuid(),
+  plan_id uuid not null references public.travel_plans (id) on delete cascade,
+  day_index int not null,
+  date date,
+  title text,
+  selected_item_ids uuid[] not null default '{}',
+  summary text,
+  reasoning text,
+  weather jsonb,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists travel_plan_days_plan_id_idx
+  on public.travel_plan_days (plan_id);
+
+alter table public.travel_plan_days enable row level security;
+
+drop policy if exists "travel_plan_days_select_own" on public.travel_plan_days;
+drop policy if exists "travel_plan_days_insert_own" on public.travel_plan_days;
+drop policy if exists "travel_plan_days_update_own" on public.travel_plan_days;
+drop policy if exists "travel_plan_days_delete_own" on public.travel_plan_days;
+
+create policy "travel_plan_days_select_own"
+  on public.travel_plan_days for select
+  using (
+    exists (
+      select 1 from public.travel_plans
+      where travel_plans.id = travel_plan_days.plan_id
+        and travel_plans.user_id = auth.uid()
+    )
+  );
+
+create policy "travel_plan_days_insert_own"
+  on public.travel_plan_days for insert
+  with check (
+    exists (
+      select 1 from public.travel_plans
+      where travel_plans.id = travel_plan_days.plan_id
+        and travel_plans.user_id = auth.uid()
+    )
+  );
+
+create policy "travel_plan_days_update_own"
+  on public.travel_plan_days for update
+  using (
+    exists (
+      select 1 from public.travel_plans
+      where travel_plans.id = travel_plan_days.plan_id
+        and travel_plans.user_id = auth.uid()
+    )
+  )
+  with check (
+    exists (
+      select 1 from public.travel_plans
+      where travel_plans.id = travel_plan_days.plan_id
+        and travel_plans.user_id = auth.uid()
+    )
+  );
+
+create policy "travel_plan_days_delete_own"
+  on public.travel_plan_days for delete
+  using (
+    exists (
+      select 1 from public.travel_plans
+      where travel_plans.id = travel_plan_days.plan_id
+        and travel_plans.user_id = auth.uid()
+    )
+  );
+
+-- ============================================================
+-- 7. shopping_checks（购物搭配助手）
+-- ============================================================
+create table if not exists public.shopping_checks (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users (id) on delete cascade,
+  product_image_url text,
+  product_analysis jsonb,
+  compatibility_score int,
+  matched_item_ids uuid[] not null default '{}',
+  outfit_ideas jsonb,
+  recommendation text,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists shopping_checks_user_id_idx
+  on public.shopping_checks (user_id);
+
+alter table public.shopping_checks enable row level security;
+
+drop policy if exists "shopping_checks_select_own" on public.shopping_checks;
+drop policy if exists "shopping_checks_insert_own" on public.shopping_checks;
+drop policy if exists "shopping_checks_update_own" on public.shopping_checks;
+drop policy if exists "shopping_checks_delete_own" on public.shopping_checks;
+
+create policy "shopping_checks_select_own"
+  on public.shopping_checks for select
+  using (auth.uid() = user_id);
+
+create policy "shopping_checks_insert_own"
+  on public.shopping_checks for insert
+  with check (auth.uid() = user_id);
+
+create policy "shopping_checks_update_own"
+  on public.shopping_checks for update
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+create policy "shopping_checks_delete_own"
+  on public.shopping_checks for delete
+  using (auth.uid() = user_id);
+
+-- ============================================================
 -- Triggers
 -- ============================================================
 
@@ -232,6 +468,20 @@ drop trigger if exists closet_items_updated_at on public.closet_items;
 
 create trigger closet_items_updated_at
   before update on public.closet_items
+  for each row
+  execute function public.handle_updated_at();
+
+drop trigger if exists user_style_profiles_updated_at on public.user_style_profiles;
+
+create trigger user_style_profiles_updated_at
+  before update on public.user_style_profiles
+  for each row
+  execute function public.handle_updated_at();
+
+drop trigger if exists user_personal_profiles_updated_at on public.user_personal_profiles;
+
+create trigger user_personal_profiles_updated_at
+  before update on public.user_personal_profiles
   for each row
   execute function public.handle_updated_at();
 

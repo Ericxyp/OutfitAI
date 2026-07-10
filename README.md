@@ -12,9 +12,11 @@ OutfitAI 是一个 **AI 私人穿搭顾问** MVP。用户可以保存自己的�
 |------|------|
 | 登录 | Supabase Auth 邮箱 Magic Link 登录 |
 | 衣橱 | 上传衣服图片、AI 识别属性、分类筛选、详情与删除 |
-| 首页 Chatbox | 输入穿搭需求，AI 从衣橱中选品生成推荐 |
-| 推荐反馈 | 喜欢 / 不太合适 / 收藏 |
-| 我的 | 衣橱 / 收藏 / 喜欢统计，收藏列表 |
+| 首页 Chatbox | 输入穿搭需求，AI 从衣橱中选品生成推荐；支持基于定位和天气的智能推荐 |
+| 旅行规划 | `/travel` 多日穿搭计划 + 打包清单，结合天气预报与风格画像 |
+| 购物助手 | `/shopping` 上传商品图，分析是否值得买、可搭配套数与组合方案 |
+| 推荐反馈 | 喜欢 / 不太合适 / 收藏，沉淀为基础风格画像 |
+| 我的 | 衣橱 / 收藏 / 喜欢统计，风格画像，收藏列表 |
 | 收藏页 | 查看已保存的穿搭推荐 |
 
 ---
@@ -46,6 +48,8 @@ cp .env.local.example .env.local
 | `QWEN_API_KEY` | 阿里云 DashScope API Key |
 | `QWEN_BASE_URL` | 兼容模式 Base URL，默认 `https://dashscope.aliyuncs.com/compatible-mode/v1` |
 | `QWEN_MODEL` | 模型名，默认 `qwen3-vl-plus` |
+| `WEATHER_API_KEY` | 天气 API Key（服务端调用，用于定位天气推荐） |
+| `WEATHER_API_BASE_URL` | 天气 API Base URL，默认 `https://api.weatherapi.com/v1` |
 | `NEXT_PUBLIC_APP_NAME` | 应用名称，默认 `OutfitAI` |
 
 ---
@@ -67,7 +71,7 @@ supabase/schema.sql
 
 将创建：
 
-- `profiles`、`closet_items`、`outfit_recommendations`、`feedback` 表
+- `profiles`、`closet_items`、`outfit_recommendations`、`feedback`、`user_style_profiles`、`travel_plans`、`travel_plan_days`、`shopping_checks` 表
 - Row Level Security 策略
 - Storage bucket `closet`（衣服图片）
 - 新用户自动创建 profile 的 Trigger
@@ -112,6 +116,101 @@ npm run test:qwen
 5. 修改 `.env.local` 后需 **重启** `npm run dev`
 
 API Key **仅存在于服务端**，不会暴露到浏览器。
+
+---
+
+## 天气推荐能力
+
+首页支持**基于定位和天气**的穿搭推荐：
+
+1. 用户点击「使用当前位置」，浏览器 Geolocation API 获取经纬度（需用户主动授权）
+2. 服务端根据经纬度调用天气 API（`lib/weather.ts`），获取温度、天气、湿度、风速等
+3. AI 推荐时会结合天气上下文和规则提示，在推荐理由中解释天气适配原因
+4. 天气信息会保存到 `outfit_recommendations.model_output.weather`
+
+**降级策略：**
+- 用户拒绝定位 → 正常推荐，不使用天气
+- 未配置 `WEATHER_API_KEY` → 正常推荐
+- 天气 API 失败或超时 → 正常推荐，不向用户报错
+
+**隐私说明：**
+- 浏览器定位仅用于本次推荐请求
+- `WEATHER_API_KEY` 只在服务端使用，不会暴露到客户端
+
+### 天气 API 配置（可选）
+
+默认适配 [WeatherAPI.com](https://www.weatherapi.com/)：
+
+```bash
+WEATHER_API_KEY=你的天气 API Key
+WEATHER_API_BASE_URL=https://api.weatherapi.com/v1
+```
+
+更换供应商时，修改 `lib/weather.ts` 中的 `normalizeWeatherApiResponse()` 字段映射即可。
+
+---
+
+## Memory 系统（风格画像）
+
+OutfitAI 会根据你的反馈逐步学习风格偏好：
+
+| 反馈 | 影响 |
+|------|------|
+| 喜欢 / 收藏 | 更新 `preferred_styles`、`preferred_colors`、`preferred_occasions`、`favorite_item_ids` |
+| 不太合适 | 更新 `avoid_styles`、`avoid_colors`、`disliked_item_ids` |
+
+- 数据保存在 Supabase 表 `user_style_profiles`
+- 后续穿搭推荐会在 AI prompt 中注入「用户风格画像」
+- 「我的」页面可查看当前风格画像
+- `/profile/style` 可查看完整风格画像，并重新生成 AI 风格总结
+- Memory 更新失败不会影响反馈提交
+
+在 Supabase SQL Editor 执行 `supabase/schema.sql` 后会创建 `user_style_profiles` 表（含 RLS）。
+
+### 风格画像页面 `/profile/style`
+
+登录后访问 **我的 → 穿搭偏好**，或直达 `/profile/style`：
+
+- 展示常用风格、偏好颜色、常用场景、不喜欢元素
+- 统计最常出现在推荐中的 Top 5 单品
+- 显示 AI 生成的个人风格总结（基于真实反馈数据，服务端调用 Qwen）
+- 支持「重新生成我的风格总结」
+
+风格总结生成逻辑读取 `user_style_profiles`、`feedback`、`outfit_recommendations`、`closet_items`，`QWEN_API_KEY` 仅在服务端使用。
+
+### 旅行穿搭规划 `/travel`
+
+登录后从 **我的 → 旅行穿搭规划** 进入，或访问 `/travel`：
+
+- 输入目的地、出发日期、天数（1-10）、旅行目的、风格偏好
+- 可选「尽量少带衣服」，AI 会规划复用策略
+- 结合 **天气预报**（`getForecastByDestination`）+ 衣橱 + 风格画像生成 Day1-DayN 穿搭
+- 输出打包清单（上装/下装/外套/鞋子/配饰）
+- 计划保存到 `travel_plans` 和 `travel_plan_days`
+
+**降级策略：**
+- 天气 API 失败 → 仍生成旅行计划，不阻断
+- 衣橱不足（<3 件）→ 提示去添加衣服
+
+### 购物搭配助手 `/shopping`
+
+登录后从 **我的 → 购物搭配助手** 进入，或访问 `/shopping`：
+
+- **第一版仅支持商品图片上传**，不支持淘宝/小红书/京东等商品链接
+- 上传想购买的商品图片（JPG / PNG / WebP，最大 5MB）
+- 可选填写商品名称、价格、品牌、链接备注、你的问题
+- 服务端调用 **Qwen Vision** 识别商品属性（类别、颜色、风格、材质、季节、版型）
+- 结合衣橱 + 风格画像输出：
+  - 推荐指数（0-100）
+  - 预计可搭配套数
+  - 推荐购买：buy（推荐购买）/ consider（谨慎考虑）/ skip（不建议购买）
+  - 原因、风险、可搭配组合
+- 分析记录保存到 `shopping_checks` 表
+- 商品图片上传到 Storage `closet` bucket 的 `{user_id}/shopping/` 路径
+
+**降级策略：**
+- 风格画像读取失败 → 不阻断分析
+- Qwen 或识别失败 → 友好错误提示
 
 ---
 

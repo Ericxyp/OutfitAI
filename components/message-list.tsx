@@ -1,10 +1,18 @@
+import Link from "next/link";
 import { PAGE_COPY } from "@/lib/constants";
 import type { RecommendationResult } from "@/lib/actions/recommendation";
 import { OutfitResultCard } from "@/components/outfit-result-card";
 
 export type ChatMessage =
   | { id: string; role: "user"; content: string }
-  | { id: string; role: "assistant"; content: string; isError?: boolean }
+  | {
+      id: string;
+      role: "assistant";
+      content: string;
+      isError?: boolean;
+      actionHref?: string;
+      actionLabel?: string;
+    }
   | {
       id: string;
       role: "recommendation";
@@ -49,7 +57,31 @@ export function isValidChatMessage(value: unknown): value is ChatMessage {
   }
 
   if (message.role === "assistant") {
-    return typeof message.content === "string";
+    if (typeof message.content !== "string") {
+      return false;
+    }
+
+    if (message.isError !== undefined && typeof message.isError !== "boolean") {
+      return false;
+    }
+
+    if (message.actionHref !== undefined) {
+      if (
+        typeof message.actionHref !== "string" ||
+        !message.actionHref.startsWith("/")
+      ) {
+        return false;
+      }
+    }
+
+    if (
+      message.actionLabel !== undefined &&
+      typeof message.actionLabel !== "string"
+    ) {
+      return false;
+    }
+
+    return true;
   }
 
   if (message.role === "recommendation") {
@@ -82,9 +114,13 @@ function UserBubble({ content }: { content: string }) {
 function AssistantBubble({
   content,
   isError,
+  actionHref,
+  actionLabel,
 }: {
   content: string;
   isError?: boolean;
+  actionHref?: string;
+  actionLabel?: string;
 }) {
   return (
     <div className="flex justify-start pr-8">
@@ -95,7 +131,15 @@ function AssistantBubble({
             : "bg-card text-foreground ring-border/60"
         }`}
       >
-        {content}
+        <p>{content}</p>
+        {actionHref && actionLabel && (
+          <Link
+            href={actionHref}
+            className="mt-3 inline-flex rounded-full bg-foreground px-4 py-2 text-xs font-medium text-background transition-opacity hover:opacity-90"
+          >
+            {actionLabel}
+          </Link>
+        )}
       </div>
     </div>
   );
@@ -168,6 +212,8 @@ export function MessageList({
               key={message.id}
               content={message.content}
               isError={message.isError}
+              actionHref={message.actionHref}
+              actionLabel={message.actionLabel}
             />
           );
         }
