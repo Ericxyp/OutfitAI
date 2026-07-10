@@ -8,6 +8,7 @@ import { SignOutButton } from "@/components/sign-out-button";
 import { DemoBanner, PageHeader } from "@/components/ui/page-states";
 
 const MENU_ITEMS = [
+  { label: "历史记录", href: "/history" },
   { label: "演示指南", href: "/demo" },
   { label: "旅行穿搭规划", href: "/travel" },
   { label: "购物助手", href: "/shopping" },
