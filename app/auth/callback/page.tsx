@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { EmailOtpType } from "@supabase/supabase-js";
+import { getSafeNextPath } from "@/lib/auth/safe-next";
 import { createClient } from "@/lib/supabase/client";
 
 export default function AuthCallbackPage() {
@@ -19,7 +20,7 @@ export default function AuthCallbackPage() {
       const tokenHash = params.get("token_hash");
       const type = params.get("type") as EmailOtpType | null;
       const code = params.get("code");
-      const next = params.get("next") ?? "/";
+      const next = getSafeNextPath(params.get("next"));
 
       const supabase = createClient();
 
