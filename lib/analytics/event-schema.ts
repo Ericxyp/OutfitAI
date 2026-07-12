@@ -1,6 +1,10 @@
 export const ANALYTICS_EVENT_NAMES = [
   "closet_item_created",
   "closet_item_failed",
+  "closet_batch_started",
+  "closet_batch_analysis_completed",
+  "closet_batch_completed",
+  "closet_batch_failed",
   "outfit_generated",
   "recommendation_failed",
   "recommendation_worn",
@@ -87,6 +91,10 @@ const FAILURE_REASON_LABELS: Record<FailureReason, string> = {
 const FEATURE_EVENT_LABELS: Record<string, string> = {
   closet_item_created: "添加衣服",
   closet_item_failed: "添加衣服失败",
+  closet_batch_started: "批量上传开始",
+  closet_batch_analysis_completed: "批量识别完成",
+  closet_batch_completed: "批量上传完成",
+  closet_batch_failed: "批量上传失败",
   outfit_generated: "穿搭推荐",
   recommendation_failed: "推荐失败",
   recommendation_worn: "确认穿着",
