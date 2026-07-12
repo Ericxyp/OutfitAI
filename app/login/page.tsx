@@ -20,7 +20,7 @@ export default function LoginPage({
 
       <div className="mx-auto w-full max-w-sm rounded-2xl bg-card p-6 shadow-sm ring-1 ring-border/60">
         <p className="mb-6 text-sm leading-relaxed text-muted">
-          输入邮箱后，我们会发送登录邮件。点击邮件中的 Sign in 即可完成登录或注册。
+          使用邮箱和密码登录；首次使用请先创建账号。
         </p>
 
         <Suspense
@@ -40,6 +40,10 @@ async function LoginFormWrapper({
 }) {
   const params = await searchParams;
   return (
-    <LoginForm urlError={params.error} urlErrorDetail={params.msg} />
+    <LoginForm
+      next={params.next}
+      urlError={params.error}
+      urlErrorDetail={params.msg}
+    />
   );
 }
