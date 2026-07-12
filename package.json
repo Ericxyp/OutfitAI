@@ -7,14 +7,15 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "test:qwen": "npx tsx scripts/test-qwen.ts",
-    "eval:recommendations": "npx tsx scripts/eval-recommendations.ts",
-    "test:style-knowledge": "npx tsx scripts/test-style-knowledge.ts",
-    "test:feedback-reason-tags": "npx tsx scripts/test-feedback-reason-tags.ts",
-    "test:clothing-gate": "npx tsx scripts/test-clothing-gate.ts",
-    "test:commerce-recommendations": "npx tsx scripts/test-commerce-recommendations.ts",
-    "backfill:closet-embeddings": "npx tsx scripts/backfill-closet-embeddings.ts",
-    "backfill:style-knowledge-embeddings": "npx tsx scripts/backfill-style-knowledge-embeddings.ts"
+    "test:qwen": "tsx scripts/test-qwen.ts",
+    "eval:recommendations": "tsx scripts/eval-recommendations.ts",
+    "test:style-knowledge": "tsx scripts/test-style-knowledge.ts",
+    "test:feedback-reason-tags": "tsx scripts/test-feedback-reason-tags.ts",
+    "test:clothing-gate": "tsx scripts/test-clothing-gate.ts",
+    "test:commerce-recommendations": "tsx scripts/test-commerce-recommendations.ts",
+    "test:user-effect-metrics": "tsx scripts/test-user-effect-metrics.ts",
+    "backfill:closet-embeddings": "tsx scripts/backfill-closet-embeddings.ts",
+    "backfill:style-knowledge-embeddings": "tsx scripts/backfill-style-knowledge-embeddings.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.0",
@@ -32,6 +33,7 @@
     "eslint": "^9.28.0",
     "eslint-config-next": "^15.3.3",
     "tailwindcss": "^4.1.8",
+    "tsx": "^4.23.0",
     "typescript": "^5.8.3"
   }
 }

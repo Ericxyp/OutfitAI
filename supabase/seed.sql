@@ -1,4 +1,14 @@
 -- OutfitAI Seed Entry
--- 如果你要导入 demo 衣橱，请运行 seed-demo-user.sql，并先替换 v_user_id_text
--- 如果你只要购物推荐商品，请运行 seed-products.sql
+--
+-- 本文件不插入任何数据，请按需选择下方脚本：
+--
+-- 1. 需要 demo 用户数据（衣橱 / 推荐 / 反馈）：
+--    运行 seed-demo-user.sql，并先将 v_user_id_text 替换为你的 auth.users.id
+--
+-- 2. 只需要购物商品推荐（「去购买」卡片）：
+--    运行 seed-products.sql（无需 user_id）
+--
+-- 3. 清理误导入的 demo 衣橱占位衣服：
+--    运行 cleanup-demo-closet.sql（先 SELECT 确认，再按注释取消 DELETE）
+--
 -- 不建议直接运行本文件

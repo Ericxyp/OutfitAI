@@ -10,6 +10,7 @@ import {
   POSITIVE_FEEDBACK_REASON_TAGS,
 } from "@/lib/feedback/reason-tags";
 import type { Json } from "@/types/database";
+import { buildUserEffectMetrics } from "@/lib/analytics/user-effect-metrics";
 
 const TREND_DAYS = 7;
 
@@ -71,6 +72,14 @@ export type UserMetrics = {
   satisfactionScore: number | null;
   acceptanceRate: number;
   acceptanceTrend: AcceptanceTrendPoint[];
+  totalWearConfirmations: number;
+  wearRate: number;
+  totalRegenerations: number;
+  regenerationRate: number;
+  averageRating: number | null;
+  totalRatings: number;
+  highRatingRate: number;
+  lowRatingRate: number;
   totalTravelPlans: number;
   totalShoppingChecks: number;
   totalCommerceClicks: number;
@@ -354,6 +363,9 @@ export async function getUserMetrics(userId: string): Promise<UserMetrics> {
     feedbackReasonRowsResult,
     commerceClicksCountResult,
     commerceClicksDetailResult,
+    wearConfirmationsCountResult,
+    regenerationCountResult,
+    recommendationRatingsResult,
   ] = await Promise.all([
     supabase
       .from("closet_items")
@@ -406,6 +418,15 @@ export async function getUserMetrics(userId: string): Promise<UserMetrics> {
       .from("commerce_clicks")
       .select("product_recommendation_id, metadata")
       .eq("user_id", userId),
+    supabase
+      .from("recommendation_wear_confirmations")
+      .select("*", { count: "exact", head: true })
+      .eq("user_id", userId),
+    countEvents(userId, "recommendation_regenerated"),
+    supabase
+      .from("recommendation_ratings")
+      .select("rating")
+      .eq("user_id", userId),
   ]);
 
   const totalClosetItems = closetCountResult.count ?? 0;
@@ -457,6 +478,16 @@ export async function getUserMetrics(userId: string): Promise<UserMetrics> {
   );
   const topMerchants = aggregateMerchants(commerceClicksDetailResult.data ?? []);
 
+  const userEffectMetrics = buildUserEffectMetrics({
+    totalOutfitGenerated,
+    totalWearConfirmations: wearConfirmationsCountResult.count ?? 0,
+    totalRegenerations: regenerationCountResult,
+    ratings: (recommendationRatingsResult.data ?? []).map((row) => row.rating),
+  });
+
+  // TODO: 首次接受率 = 未发生重新生成且获得 like/save 的推荐数 / 首次推荐数
+  // 需要跨 recommendation 与 event_logs 关联计算，后续单独补充。
+
   return {
     totalClosetItems,
     totalOutfitGenerated,
@@ -468,6 +499,14 @@ export async function getUserMetrics(userId: string): Promise<UserMetrics> {
     satisfactionScore,
     acceptanceRate,
     acceptanceTrend,
+    totalWearConfirmations: userEffectMetrics.totalWearConfirmations,
+    wearRate: userEffectMetrics.wearRate,
+    totalRegenerations: userEffectMetrics.totalRegenerations,
+    regenerationRate: userEffectMetrics.regenerationRate,
+    averageRating: userEffectMetrics.averageRating,
+    totalRatings: userEffectMetrics.totalRatings,
+    highRatingRate: userEffectMetrics.highRatingRate,
+    lowRatingRate: userEffectMetrics.lowRatingRate,
     totalTravelPlans,
     totalShoppingChecks,
     totalCommerceClicks,

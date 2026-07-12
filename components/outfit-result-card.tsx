@@ -3,6 +3,8 @@
 import type { RecommendationResult } from "@/lib/actions/recommendation";
 import { PAGE_COPY } from "@/lib/constants";
 import { FeedbackButtons } from "@/components/feedback-buttons";
+import { RecommendationRating } from "@/components/recommendation-rating";
+import { WearConfirmationButton } from "@/components/wear-confirmation-button";
 import { sanitizeVisibleAiText } from "@/lib/text/sanitize-visible-ai-text";
 
 export function OutfitResultCard({
@@ -106,6 +108,10 @@ export function OutfitResultCard({
       </div>
 
       <FeedbackButtons recommendationId={recommendation.id} />
+
+      <RecommendationRating recommendationId={recommendation.id} />
+
+      <WearConfirmationButton recommendationId={recommendation.id} />
 
       <div className="border-t border-border/50 p-3">
         <button

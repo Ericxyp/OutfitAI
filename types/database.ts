@@ -168,6 +168,54 @@ export interface Database {
         };
         Relationships: [];
       };
+      recommendation_wear_confirmations: {
+        Row: {
+          id: string;
+          user_id: string;
+          recommendation_id: string;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          recommendation_id: string;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          user_id?: string;
+          recommendation_id?: string;
+          created_at?: string;
+        };
+        Relationships: [];
+      };
+      recommendation_ratings: {
+        Row: {
+          id: string;
+          user_id: string;
+          recommendation_id: string;
+          rating: number;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          recommendation_id: string;
+          rating: number;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          user_id?: string;
+          recommendation_id?: string;
+          rating?: number;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
       user_style_profiles: {
         Row: {
           user_id: string;
@@ -376,10 +424,14 @@ export interface Database {
           price_max: number | null;
           image_url: string | null;
           product_url: string;
+          affiliate_url: string | null;
           merchant: string | null;
           commission_type: string | null;
+          source: string | null;
+          recommendation_reason: string | null;
           is_active: boolean;
           created_at: string;
+          updated_at: string;
         };
         Insert: {
           id?: string;
@@ -393,10 +445,14 @@ export interface Database {
           price_max?: number | null;
           image_url?: string | null;
           product_url: string;
+          affiliate_url?: string | null;
           merchant?: string | null;
           commission_type?: string | null;
+          source?: string | null;
+          recommendation_reason?: string | null;
           is_active?: boolean;
           created_at?: string;
+          updated_at?: string;
         };
         Update: {
           id?: string;
@@ -410,10 +466,14 @@ export interface Database {
           price_max?: number | null;
           image_url?: string | null;
           product_url?: string;
+          affiliate_url?: string | null;
           merchant?: string | null;
           commission_type?: string | null;
+          source?: string | null;
+          recommendation_reason?: string | null;
           is_active?: boolean;
           created_at?: string;
+          updated_at?: string;
         };
         Relationships: [];
       };
@@ -557,6 +617,10 @@ export type ClosetItem = Database["public"]["Tables"]["closet_items"]["Row"];
 export type OutfitRecommendation =
   Database["public"]["Tables"]["outfit_recommendations"]["Row"];
 export type Feedback = Database["public"]["Tables"]["feedback"]["Row"];
+export type RecommendationWearConfirmation =
+  Database["public"]["Tables"]["recommendation_wear_confirmations"]["Row"];
+export type RecommendationRatingRow =
+  Database["public"]["Tables"]["recommendation_ratings"]["Row"];
 export type UserStyleProfile =
   Database["public"]["Tables"]["user_style_profiles"]["Row"];
 export type UserPersonalProfile =

@@ -8,7 +8,6 @@ import {
   generateShoppingCheck,
   type ShoppingOutfitIdea,
 } from "@/lib/ai/generate-shopping-check";
-import { formatQwenError } from "@/lib/ai/qwen";
 import { trackEvent } from "@/lib/analytics/track-event";
 import { trackFailureEvent } from "@/lib/analytics/track-failure";
 import type { FailureReason } from "@/lib/analytics/event-schema";
@@ -21,6 +20,7 @@ import {
 import { getUserPersonalProfile } from "@/lib/memory/personal-profile";
 import { getUserStyleProfile } from "@/lib/memory/style-profile";
 import { createClient } from "@/lib/supabase/server";
+import { logger, safeErrorFields } from "@/lib/logger";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ClosetItem, Database } from "@/types/database";
 
@@ -119,9 +119,11 @@ async function removeUploadedImage(
     .remove([filePath]);
 
   if (error) {
-    console.error("[shoppingWorkflow] cleanup image failed", {
-      filePath,
-      message: error.message,
+    logger.error("[shoppingWorkflow] cleanup image failed", {
+      feature: "shopping",
+      reason: "cleanup_failed",
+      errorName: "StorageError",
+      errorMessage: error.message.slice(0, 200),
     });
   }
 }
@@ -188,8 +190,11 @@ export async function runShoppingWorkflow(
     });
 
   if (uploadError) {
-    console.error("[shoppingWorkflow] image upload failed", {
-      message: uploadError.message,
+    logger.error("[shoppingWorkflow] image upload failed", {
+      feature: "shopping",
+      reason: "image_upload_failed",
+      errorName: "StorageError",
+      errorMessage: uploadError.message.slice(0, 200),
     });
     await trackShoppingCheckFailed(input.userId, "image_upload_failed", {
       hasImage: true,
@@ -201,8 +206,7 @@ export async function runShoppingWorkflow(
     data: { publicUrl },
   } = supabase.storage.from(CLOSET_STORAGE_BUCKET).getPublicUrl(filePath);
 
-  console.log("[shoppingWorkflow] image upload success", {
-    filePath,
+  logger.debug("[shoppingWorkflow] image upload success", {
     imageSize: input.image.size,
     mimeType: input.image.type,
   });
@@ -211,9 +215,10 @@ export async function runShoppingWorkflow(
   try {
     imageBase64 = await fileToBase64(input.image);
   } catch (error) {
-    console.error("[shoppingWorkflow] fileToBase64 failed", {
-      errorName: error instanceof Error ? error.name : "UnknownError",
-      errorMessage: error instanceof Error ? error.message : String(error),
+    logger.error("[shoppingWorkflow] fileToBase64 failed", {
+      feature: "shopping",
+      reason: "file_read_failed",
+      ...safeErrorFields(error),
     });
     await removeUploadedImage(supabase, filePath);
     await trackShoppingCheckFailed(input.userId, "product_analysis_failed", {
@@ -224,7 +229,7 @@ export async function runShoppingWorkflow(
 
   let product: ProductAnalysis;
   try {
-    console.log("[shoppingWorkflow] analyzeProduct start", {
+    logger.debug("[shoppingWorkflow] analyzeProduct start", {
       base64Length: imageBase64.length,
       mimeType: input.image.type,
       hasProductName: Boolean(input.userInput?.productName),
@@ -238,8 +243,7 @@ export async function runShoppingWorkflow(
 
     product = mergeProductUserInput(visionProduct, input.userInput);
 
-    console.log("[shoppingWorkflow] analyzeProduct success", {
-      productName: product.name,
+    logger.info("[shoppingWorkflow] analyzeProduct success", {
       category: product.category,
     });
   } catch (error) {
@@ -247,10 +251,11 @@ export async function runShoppingWorkflow(
     const errorMessage =
       error instanceof Error ? error.message : String(error);
 
-    console.error("[shoppingWorkflow] analyzeProduct failed", {
+    logger.error("[shoppingWorkflow] analyzeProduct failed", {
+      feature: "shopping",
+      reason: "analyze_failed",
       errorName,
-      errorMessage,
-      formatted: formatQwenError(error),
+      errorMessage: errorMessage.slice(0, 200),
     });
 
     await removeUploadedImage(supabase, filePath);
@@ -301,7 +306,7 @@ export async function runShoppingWorkflow(
 
   let aiResult;
   try {
-    console.log("[shoppingWorkflow] generateShoppingCheck start", {
+    logger.info("[shoppingWorkflow] generateShoppingCheck start", {
       hasStyleProfile: styleProfile !== null && styleProfile.feedbackCount > 0,
       hasPersonalProfile: personalProfile !== null,
       styleKnowledgeCount: styleKnowledge.length,
@@ -316,7 +321,7 @@ export async function runShoppingWorkflow(
       styleKnowledge,
     });
 
-    console.log("[shoppingWorkflow] generateShoppingCheck success", {
+    logger.info("[shoppingWorkflow] generateShoppingCheck success", {
       compatibilityScore: aiResult.compatibility_score,
       recommendation: aiResult.recommendation,
       outfitIdeaCount: aiResult.outfit_ideas.length,
@@ -326,10 +331,11 @@ export async function runShoppingWorkflow(
     const errorMessage =
       error instanceof Error ? error.message : String(error);
 
-    console.error("[shoppingWorkflow] generateShoppingCheck failed", {
+    logger.error("[shoppingWorkflow] generateShoppingCheck failed", {
+      feature: "shopping",
+      reason: "generate_failed",
       errorName,
-      errorMessage,
-      formatted: formatQwenError(error),
+      errorMessage: errorMessage.slice(0, 200),
     });
 
     await removeUploadedImage(supabase, filePath);
@@ -376,9 +382,11 @@ export async function runShoppingWorkflow(
     .single();
 
   if (saveError || !saved) {
-    console.error("[shoppingWorkflow] save shopping_checks failed", {
-      message: saveError?.message,
-      code: saveError?.code,
+    logger.error("[shoppingWorkflow] save shopping_checks failed", {
+      feature: "shopping",
+      reason: "save_failed",
+      errorName: saveError?.name ?? "PostgrestError",
+      errorMessage: (saveError?.message ?? "missing row").slice(0, 200),
     });
     await removeUploadedImage(supabase, filePath);
     await trackShoppingCheckFailed(input.userId, "database_missing", {
@@ -402,7 +410,7 @@ export async function runShoppingWorkflow(
     },
   });
 
-  console.log("[shoppingWorkflow] save shopping_checks success", {
+  logger.info("[shoppingWorkflow] save shopping_checks success", {
     checkId: saved.id,
   });
 
@@ -416,13 +424,12 @@ export async function runShoppingWorkflow(
       limit: 4,
     });
   } catch (recommendationError) {
-    console.warn(
-      "[shoppingWorkflow] product recommendations skipped:",
-      recommendationError
-    );
+    logger.warn("[shoppingWorkflow] product recommendations skipped", {
+      ...safeErrorFields(recommendationError),
+    });
   }
 
-  console.log("[shoppingWorkflow] recommendedProductCount", {
+  logger.debug("[shoppingWorkflow] recommendedProductCount", {
     count: recommendedProducts.length,
   });
 

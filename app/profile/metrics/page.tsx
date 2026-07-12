@@ -12,8 +12,11 @@ function formatPercent(value: number) {
   return `${Math.round(value * 100)}%`;
 }
 
-function formatScore(value: number | null) {
+function formatScore(value: number | null, digits = 0) {
   if (value === null) return "—";
+  if (digits > 0) {
+    return value.toFixed(digits);
+  }
   return `${Math.round(value)}%`;
 }
 
@@ -49,6 +52,10 @@ function formatEventDetail(metadata: Record<string, unknown>) {
 
   if (typeof metadata.destination === "string") {
     parts.push(metadata.destination);
+  }
+
+  if (typeof metadata.rating === "number") {
+    parts.push(`${metadata.rating} 分`);
   }
 
   if (typeof metadata.compatibilityScore === "number") {
@@ -239,6 +246,54 @@ export default async function MetricsPage() {
                 ))}
               </div>
             )}
+          </section>
+
+          <section className="rounded-2xl bg-card p-5 shadow-sm ring-1 ring-border/60">
+            <h2 className="text-sm font-medium text-foreground">用户效果</h2>
+            <p className="mt-1 text-xs text-muted">
+              实际穿着率 = 确认穿着的去重推荐数 / 推荐生成数；重新生成率 =
+              重新生成事件数 / 推荐生成数；高分推荐率 = 评分 ≥ 4 / 总评分；低分推荐率 =
+              评分 ≤ 2 / 总评分
+            </p>
+            <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
+              <StatCard
+                label="实际穿着次数"
+                value={metrics.totalWearConfirmations}
+              />
+              <StatCard
+                label="实际穿着率"
+                value={formatPercent(metrics.wearRate)}
+              />
+              <StatCard
+                label="重新生成次数"
+                value={metrics.totalRegenerations}
+              />
+              <StatCard
+                label="重新生成率"
+                value={formatPercent(metrics.regenerationRate)}
+              />
+              <StatCard
+                label="平均推荐评分"
+                value={formatScore(metrics.averageRating, 1)}
+              />
+              <StatCard label="评分总数" value={metrics.totalRatings} />
+              <StatCard
+                label="高分推荐率"
+                value={formatPercent(metrics.highRatingRate)}
+              />
+              <StatCard
+                label="低分推荐率"
+                value={formatPercent(metrics.lowRatingRate)}
+              />
+            </div>
+
+            {metrics.totalOutfitGenerated === 0 &&
+              metrics.totalRatings === 0 &&
+              metrics.totalWearConfirmations === 0 && (
+                <p className="mt-4 text-sm leading-relaxed text-muted">
+                  暂无用户效果数据。生成推荐、确认穿着或提交评分后会在这里展示。
+                </p>
+              )}
           </section>
 
           <section className="rounded-2xl bg-card p-5 shadow-sm ring-1 ring-border/60">

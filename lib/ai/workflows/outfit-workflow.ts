@@ -2,6 +2,10 @@ import { revalidatePath } from "next/cache";
 import { generateOutfit } from "@/lib/ai/generate-outfit";
 import { QWEN_UNAVAILABLE_RECOMMENDATION } from "@/lib/ai/qwen";
 import { trackEvent } from "@/lib/analytics/track-event";
+import {
+  getRegenerationWindowStartIso,
+  resolveRegenerationTracking,
+} from "@/lib/analytics/regeneration-tracking";
 import { trackFailureEvent } from "@/lib/analytics/track-failure";
 import type { FailureReason } from "@/lib/analytics/event-schema";
 import { retrieveStyleKnowledge } from "@/lib/knowledge/retrieve-style-knowledge";
@@ -15,6 +19,7 @@ import {
 import { parseRecommendationRequirement } from "@/lib/recommendation/rule-engine";
 import { getWeatherByCoordinates } from "@/lib/weather";
 import { createClient } from "@/lib/supabase/server";
+import { logger, safeErrorFields } from "@/lib/logger";
 import type {
   OutfitWorkflowInput,
   OutfitWorkflowResult,
@@ -62,7 +67,7 @@ async function resolveWeatherContext(
   );
 
   if (!hasLocation) {
-    console.log("[outfitWorkflow] weather skipped", {
+    logger.debug("[outfitWorkflow] weather skipped", {
       hasLocation: false,
       weatherResult: false,
     });
@@ -73,7 +78,7 @@ async function resolveWeatherContext(
     const weather = await getWeatherByCoordinates(location!);
     const weatherResult = weather !== null;
 
-    console.log("[outfitWorkflow] weather lookup finished", {
+    logger.debug("[outfitWorkflow] weather lookup finished", {
       hasLocation: true,
       weatherResult,
       ...(weather
@@ -87,8 +92,12 @@ async function resolveWeatherContext(
 
     return weather;
   } catch (error) {
-    console.error("[outfitWorkflow] weather lookup failed:", error);
-    console.log("[outfitWorkflow] weather lookup finished", {
+    logger.error("[outfitWorkflow] weather lookup failed", {
+      feature: "outfit",
+      reason: "weather_lookup_failed",
+      ...safeErrorFields(error),
+    });
+    logger.debug("[outfitWorkflow] weather lookup finished", {
       hasLocation: true,
       weatherResult: false,
     });
@@ -169,7 +178,7 @@ export async function runOutfitWorkflow(
     personalProfile,
   });
 
-  console.log("[outfitWorkflow] calling generateOutfit", {
+  logger.info("[outfitWorkflow] calling generateOutfit", {
     hasLocation: Boolean(options?.location),
     hasWeather: weatherContext !== null,
     hasStyleProfile: styleProfile !== null && styleProfile.feedbackCount > 0,
@@ -221,11 +230,16 @@ export async function runOutfitWorkflow(
           },
         },
       })
-      .select("id")
+      .select("id, created_at")
       .single();
 
     if (saveError || !saved) {
-      console.error("[outfitWorkflow] save failed", saveError);
+      logger.error("[outfitWorkflow] save failed", {
+        feature: "outfit",
+        reason: "save_failed",
+        errorName: saveError?.name ?? "PostgrestError",
+        errorMessage: saveError?.message?.slice(0, 200) ?? "missing row",
+      });
       await trackRecommendationFailed(userId, "save_failed", {
         hasWeather: weatherContext !== null,
         requestLength: trimmed.length,
@@ -253,6 +267,38 @@ export async function runOutfitWorkflow(
       },
     });
 
+    const windowStartIso = getRegenerationWindowStartIso();
+    const { data: recentRecommendations } = await supabase
+      .from("outfit_recommendations")
+      .select("id, created_at")
+      .eq("user_id", userId)
+      .gte("created_at", windowStartIso)
+      .order("created_at", { ascending: false });
+
+    const regeneration = resolveRegenerationTracking({
+      previousRecommendations: (recentRecommendations ?? []).map((row) => ({
+        id: row.id,
+        createdAt: row.created_at,
+      })),
+      currentRecommendationId: saved.id,
+      currentCreatedAt: saved.created_at,
+    });
+
+    if (regeneration.shouldTrack && regeneration.previousRecommendationId) {
+      await trackEvent({
+        userId,
+        eventName: "recommendation_regenerated",
+        entityType: "outfit_recommendation",
+        entityId: saved.id,
+        metadata: {
+          feature: "outfit",
+          previousRecommendationId: regeneration.previousRecommendationId,
+          currentRecommendationId: saved.id,
+          elapsedSeconds: regeneration.elapsedSeconds ?? 0,
+        },
+      });
+    }
+
     revalidatePath("/profile");
     revalidatePath("/saved");
 
@@ -269,11 +315,15 @@ export async function runOutfitWorkflow(
       items: selectedItems,
     };
 
-    console.log("[outfitWorkflow] success", { recommendationId: saved.id });
+    logger.info("[outfitWorkflow] success", { recommendationId: saved.id });
 
     return { success: true, recommendation };
   } catch (error) {
-    console.error("[outfitWorkflow] generateOutfit failed:", error);
+    logger.error("[outfitWorkflow] generateOutfit failed", {
+      feature: "outfit",
+      reason: "qwen_unavailable",
+      ...safeErrorFields(error),
+    });
     await trackRecommendationFailed(userId, "qwen_unavailable", {
       hasWeather: weatherContext !== null,
       requestLength: trimmed.length,

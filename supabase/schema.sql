@@ -204,6 +204,136 @@ create policy "feedback_delete_own"
   using (auth.uid() = user_id);
 
 -- ============================================================
+-- 4b. recommendation_wear_confirmations（实际穿着确认）
+-- ============================================================
+create table if not exists public.recommendation_wear_confirmations (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users (id) on delete cascade,
+  recommendation_id uuid not null
+    references public.outfit_recommendations (id) on delete cascade,
+  created_at timestamptz not null default now(),
+  constraint recommendation_wear_confirmations_user_rec_unique
+    unique (user_id, recommendation_id)
+);
+
+create index if not exists recommendation_wear_confirmations_user_id_idx
+  on public.recommendation_wear_confirmations (user_id);
+
+create index if not exists recommendation_wear_confirmations_recommendation_id_idx
+  on public.recommendation_wear_confirmations (recommendation_id);
+
+alter table public.recommendation_wear_confirmations enable row level security;
+
+drop policy if exists "recommendation_wear_confirmations_select_own"
+  on public.recommendation_wear_confirmations;
+drop policy if exists "recommendation_wear_confirmations_insert_own"
+  on public.recommendation_wear_confirmations;
+drop policy if exists "recommendation_wear_confirmations_update_own"
+  on public.recommendation_wear_confirmations;
+drop policy if exists "recommendation_wear_confirmations_delete_own"
+  on public.recommendation_wear_confirmations;
+
+create policy "recommendation_wear_confirmations_select_own"
+  on public.recommendation_wear_confirmations for select
+  using (auth.uid() = user_id);
+
+create policy "recommendation_wear_confirmations_insert_own"
+  on public.recommendation_wear_confirmations for insert
+  with check (
+    auth.uid() = user_id
+    and exists (
+      select 1
+      from public.outfit_recommendations r
+      where r.id = recommendation_id
+        and r.user_id = auth.uid()
+    )
+  );
+
+create policy "recommendation_wear_confirmations_update_own"
+  on public.recommendation_wear_confirmations for update
+  using (auth.uid() = user_id)
+  with check (
+    auth.uid() = user_id
+    and exists (
+      select 1
+      from public.outfit_recommendations r
+      where r.id = recommendation_id
+        and r.user_id = auth.uid()
+    )
+  );
+
+create policy "recommendation_wear_confirmations_delete_own"
+  on public.recommendation_wear_confirmations for delete
+  using (auth.uid() = user_id);
+
+-- ============================================================
+-- 4c. recommendation_ratings（推荐评分 1-5）
+-- ============================================================
+create table if not exists public.recommendation_ratings (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users (id) on delete cascade,
+  recommendation_id uuid not null
+    references public.outfit_recommendations (id) on delete cascade,
+  rating integer not null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint recommendation_ratings_rating_check
+    check (rating between 1 and 5),
+  constraint recommendation_ratings_user_rec_unique
+    unique (user_id, recommendation_id)
+);
+
+create index if not exists recommendation_ratings_user_id_idx
+  on public.recommendation_ratings (user_id);
+
+create index if not exists recommendation_ratings_recommendation_id_idx
+  on public.recommendation_ratings (recommendation_id);
+
+alter table public.recommendation_ratings enable row level security;
+
+drop policy if exists "recommendation_ratings_select_own"
+  on public.recommendation_ratings;
+drop policy if exists "recommendation_ratings_insert_own"
+  on public.recommendation_ratings;
+drop policy if exists "recommendation_ratings_update_own"
+  on public.recommendation_ratings;
+drop policy if exists "recommendation_ratings_delete_own"
+  on public.recommendation_ratings;
+
+create policy "recommendation_ratings_select_own"
+  on public.recommendation_ratings for select
+  using (auth.uid() = user_id);
+
+create policy "recommendation_ratings_insert_own"
+  on public.recommendation_ratings for insert
+  with check (
+    auth.uid() = user_id
+    and exists (
+      select 1
+      from public.outfit_recommendations r
+      where r.id = recommendation_id
+        and r.user_id = auth.uid()
+    )
+  );
+
+create policy "recommendation_ratings_update_own"
+  on public.recommendation_ratings for update
+  using (auth.uid() = user_id)
+  with check (
+    auth.uid() = user_id
+    and exists (
+      select 1
+      from public.outfit_recommendations r
+      where r.id = recommendation_id
+        and r.user_id = auth.uid()
+    )
+  );
+
+create policy "recommendation_ratings_delete_own"
+  on public.recommendation_ratings for delete
+  using (auth.uid() = user_id);
+
+-- ============================================================
 -- 5. user_style_profiles（Memory / 风格画像）
 -- ============================================================
 create table if not exists public.user_style_profiles (
@@ -441,6 +571,7 @@ create policy "shopping_checks_delete_own"
 
 -- ============================================================
 -- 7b. product_recommendations（商品库 / 商业推荐 MVP）
+-- product_url: 原始商品链接；affiliate_url: 佣金/联盟链接（前端优先）
 -- ============================================================
 create table if not exists public.product_recommendations (
   id uuid primary key default gen_random_uuid(),
@@ -454,11 +585,27 @@ create table if not exists public.product_recommendations (
   price_max numeric,
   image_url text,
   product_url text not null,
+  affiliate_url text,
   merchant text,
-  commission_type text,
+  commission_type text default 'demo',
+  source text default 'manual',
+  recommendation_reason text,
   is_active boolean not null default true,
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
 );
+
+alter table public.product_recommendations
+  add column if not exists affiliate_url text;
+
+alter table public.product_recommendations
+  add column if not exists source text default 'manual';
+
+alter table public.product_recommendations
+  add column if not exists recommendation_reason text;
+
+alter table public.product_recommendations
+  add column if not exists updated_at timestamptz not null default now();
 
 create index if not exists product_recommendations_active_idx
   on public.product_recommendations (is_active)
@@ -473,11 +620,26 @@ create index if not exists product_recommendations_style_tags_idx
 alter table public.product_recommendations enable row level security;
 
 drop policy if exists "product_recommendations_select_active" on public.product_recommendations;
+drop policy if exists "product_recommendations_select_authenticated" on public.product_recommendations;
+drop policy if exists "product_recommendations_insert_authenticated" on public.product_recommendations;
+drop policy if exists "product_recommendations_update_authenticated" on public.product_recommendations;
 
-create policy "product_recommendations_select_active"
+-- Demo 管理页：登录用户可读全部商品（含停用）；购物召回仍按 is_active 过滤
+create policy "product_recommendations_select_authenticated"
   on public.product_recommendations for select
   to authenticated
-  using (is_active = true);
+  using (true);
+
+create policy "product_recommendations_insert_authenticated"
+  on public.product_recommendations for insert
+  to authenticated
+  with check (true);
+
+create policy "product_recommendations_update_authenticated"
+  on public.product_recommendations for update
+  to authenticated
+  using (true)
+  with check (true);
 
 -- ============================================================
 -- 7c. commerce_clicks（购买点击转化追踪）
@@ -804,6 +966,20 @@ drop trigger if exists user_personal_profiles_updated_at on public.user_personal
 
 create trigger user_personal_profiles_updated_at
   before update on public.user_personal_profiles
+  for each row
+  execute function public.handle_updated_at();
+
+drop trigger if exists product_recommendations_updated_at on public.product_recommendations;
+
+create trigger product_recommendations_updated_at
+  before update on public.product_recommendations
+  for each row
+  execute function public.handle_updated_at();
+
+drop trigger if exists recommendation_ratings_updated_at on public.recommendation_ratings;
+
+create trigger recommendation_ratings_updated_at
+  before update on public.recommendation_ratings
   for each row
   execute function public.handle_updated_at();
 
