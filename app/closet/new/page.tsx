@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import Link from "next/link";
 import { getClothingOptions } from "@/lib/actions/clothing-options";
 import { PAGE_COPY } from "@/lib/constants";
 import { AddClothingForm } from "@/components/add-clothing-form";
@@ -24,6 +25,14 @@ export default async function NewClothingPage() {
         subtitle={PAGE_COPY.addClothing.subtitle}
         backHref="/closet"
         backLabel="返回衣橱"
+        action={
+          <Link
+            href="/closet/batch"
+            className="flex h-10 items-center rounded-full bg-card px-3 text-sm font-medium text-foreground ring-1 ring-border/60 transition-colors hover:bg-accent"
+          >
+            批量添加
+          </Link>
+        }
       />
 
       <AddClothingForm options={options} />

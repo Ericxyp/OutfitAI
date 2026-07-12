@@ -51,21 +51,30 @@ export default async function ClosetPage({
         title={PAGE_COPY.closet.title}
         subtitle={PAGE_COPY.closet.subtitle}
         action={
-          <Link
-            href="/closet/new"
-            aria-label={PAGE_COPY.closet.addFab}
-            className="flex h-10 shrink-0 items-center gap-1.5 rounded-full bg-foreground px-4 text-sm font-medium text-background transition-opacity hover:opacity-90"
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden>
-              <path
-                d="M12 5v14M5 12h14"
-                stroke="currentColor"
-                strokeWidth="1.5"
-                strokeLinecap="round"
-              />
-            </svg>
-            {PAGE_COPY.closet.addFab}
-          </Link>
+          <div className="flex shrink-0 items-center gap-2">
+            <Link
+              href="/closet/batch"
+              aria-label="批量添加"
+              className="flex h-10 items-center rounded-full bg-card px-3 text-sm font-medium text-foreground ring-1 ring-border/60 transition-colors hover:bg-accent"
+            >
+              批量添加
+            </Link>
+            <Link
+              href="/closet/new"
+              aria-label={PAGE_COPY.closet.addFab}
+              className="flex h-10 items-center gap-1.5 rounded-full bg-foreground px-4 text-sm font-medium text-background transition-opacity hover:opacity-90"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden>
+                <path
+                  d="M12 5v14M5 12h14"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                />
+              </svg>
+              {PAGE_COPY.closet.addFab}
+            </Link>
+          </div>
         }
       />
 
