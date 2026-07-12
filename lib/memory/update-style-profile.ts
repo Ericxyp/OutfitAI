@@ -1,45 +1,11 @@
 import { createClient } from "@/lib/supabase/server";
+import { trackEvent } from "@/lib/analytics/track-event";
+import {
+  applyFeedbackReasonEffects,
+  type RecommendationSignals,
+  type StyleProfileArrays,
+} from "@/lib/memory/feedback-reason-effects";
 import type { FeedbackRating } from "@/types/database";
-
-const MAX_TAG_COUNT = 12;
-const MAX_ITEM_ID_COUNT = 50;
-
-function mergeUniqueStrings(
-  existing: string[],
-  incoming: string[],
-  max: number
-): string[] {
-  const result: string[] = [];
-  const seen = new Set<string>();
-
-  for (const value of [...incoming, ...existing]) {
-    const trimmed = value.trim();
-    if (!trimmed || seen.has(trimmed)) continue;
-    seen.add(trimmed);
-    result.push(trimmed);
-    if (result.length >= max) break;
-  }
-
-  return result;
-}
-
-function mergeUniqueIds(
-  existing: string[],
-  incoming: string[],
-  max: number
-): string[] {
-  const result: string[] = [];
-  const seen = new Set<string>();
-
-  for (const id of [...incoming, ...existing]) {
-    if (!id || seen.has(id)) continue;
-    seen.add(id);
-    result.push(id);
-    if (result.length >= max) break;
-  }
-
-  return result;
-}
 
 function collectNonEmptyStrings(values: (string | null | undefined)[]): string[] {
   return values
@@ -52,8 +18,10 @@ export async function updateStyleProfileFromFeedback(input: {
   userId: string;
   recommendationId: string;
   rating: FeedbackRating;
+  reasonTags?: string[];
 }): Promise<void> {
   const { userId, recommendationId, rating } = input;
+  const reasonTags = input.reasonTags ?? [];
 
   try {
     const supabase = await createClient();
@@ -95,20 +63,22 @@ export async function updateStyleProfileFromFeedback(input: {
     );
     const itemOccasions = closetItems.flatMap((item) => item.occasion_tags);
 
-    const mergedStyles = mergeUniqueStrings(
-      [],
-      [...(recommendation.style_tags ?? []), ...itemStyles],
-      MAX_TAG_COUNT
-    );
-    const mergedColors = mergeUniqueStrings([], itemColors, MAX_TAG_COUNT);
-    const mergedOccasions = mergeUniqueStrings(
-      [],
-      [
-        ...collectNonEmptyStrings([recommendation.occasion]),
-        ...itemOccasions,
+    const signals: RecommendationSignals = {
+      styles: [
+        ...new Set([
+          ...(recommendation.style_tags ?? []),
+          ...itemStyles,
+        ]),
       ],
-      MAX_TAG_COUNT
-    );
+      colors: [...new Set(itemColors)],
+      occasions: [
+        ...new Set([
+          ...collectNonEmptyStrings([recommendation.occasion]),
+          ...itemOccasions,
+        ]),
+      ],
+      selectedItemIds,
+    };
 
     const { data: existing } = await supabase
       .from("user_style_profiles")
@@ -116,59 +86,32 @@ export async function updateStyleProfileFromFeedback(input: {
       .eq("user_id", userId)
       .maybeSingle();
 
-    const isPositive = rating === "like" || rating === "save";
+    const existingArrays: StyleProfileArrays = {
+      preferredStyles: existing?.preferred_styles ?? [],
+      preferredColors: existing?.preferred_colors ?? [],
+      preferredOccasions: existing?.preferred_occasions ?? [],
+      avoidStyles: existing?.avoid_styles ?? [],
+      avoidColors: existing?.avoid_colors ?? [],
+      favoriteItemIds: existing?.favorite_item_ids ?? [],
+      dislikedItemIds: existing?.disliked_item_ids ?? [],
+    };
+
+    const adjusted = applyFeedbackReasonEffects({
+      rating,
+      reasonTags,
+      signals,
+      existing: existingArrays,
+    });
 
     const nextProfile = {
       user_id: userId,
-      preferred_styles: isPositive
-        ? mergeUniqueStrings(
-            existing?.preferred_styles ?? [],
-            mergedStyles,
-            MAX_TAG_COUNT
-          )
-        : (existing?.preferred_styles ?? []),
-      preferred_colors: isPositive
-        ? mergeUniqueStrings(
-            existing?.preferred_colors ?? [],
-            mergedColors,
-            MAX_TAG_COUNT
-          )
-        : (existing?.preferred_colors ?? []),
-      preferred_occasions: isPositive
-        ? mergeUniqueStrings(
-            existing?.preferred_occasions ?? [],
-            mergedOccasions,
-            MAX_TAG_COUNT
-          )
-        : (existing?.preferred_occasions ?? []),
-      avoid_styles: !isPositive
-        ? mergeUniqueStrings(
-            existing?.avoid_styles ?? [],
-            mergedStyles,
-            MAX_TAG_COUNT
-          )
-        : (existing?.avoid_styles ?? []),
-      avoid_colors: !isPositive
-        ? mergeUniqueStrings(
-            existing?.avoid_colors ?? [],
-            mergedColors,
-            MAX_TAG_COUNT
-          )
-        : (existing?.avoid_colors ?? []),
-      favorite_item_ids: isPositive
-        ? mergeUniqueIds(
-            existing?.favorite_item_ids ?? [],
-            selectedItemIds,
-            MAX_ITEM_ID_COUNT
-          )
-        : (existing?.favorite_item_ids ?? []),
-      disliked_item_ids: !isPositive
-        ? mergeUniqueIds(
-            existing?.disliked_item_ids ?? [],
-            selectedItemIds,
-            MAX_ITEM_ID_COUNT
-          )
-        : (existing?.disliked_item_ids ?? []),
+      preferred_styles: adjusted.preferredStyles,
+      preferred_colors: adjusted.preferredColors,
+      preferred_occasions: adjusted.preferredOccasions,
+      avoid_styles: adjusted.avoidStyles,
+      avoid_colors: adjusted.avoidColors,
+      favorite_item_ids: adjusted.favoriteItemIds,
+      disliked_item_ids: adjusted.dislikedItemIds,
       style_summary: existing?.style_summary ?? null,
       feedback_count: (existing?.feedback_count ?? 0) + 1,
     };
@@ -185,7 +128,19 @@ export async function updateStyleProfileFromFeedback(input: {
     console.log("[styleProfile] updated from feedback", {
       userId,
       rating,
+      reasonTags,
       feedbackCount: nextProfile.feedback_count,
+    });
+
+    await trackEvent({
+      userId,
+      eventName: "style_profile_updated",
+      metadata: {
+        source: "feedback",
+        feedbackType: rating,
+        reasonTags,
+        feedbackCount: nextProfile.feedback_count,
+      },
     });
   } catch (error) {
     console.error("[styleProfile] updateStyleProfileFromFeedback failed:", error);

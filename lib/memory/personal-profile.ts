@@ -1,5 +1,8 @@
 import { createClient } from "@/lib/supabase/server";
-import type { UserPersonalProfile } from "@/types/database";
+import { trackEvent } from "@/lib/analytics/track-event";
+import { trackFailureEvent } from "@/lib/analytics/track-failure";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import type { Database, UserPersonalProfile } from "@/types/database";
 
 export {
   AVOID_BODY_FOCUS_OPTIONS,
@@ -29,10 +32,11 @@ function mapRowToContext(row: UserPersonalProfile): PersonalProfileContext {
 }
 
 export async function getUserPersonalProfile(
-  userId: string
+  userId: string,
+  supabaseClient?: SupabaseClient<Database>
 ): Promise<PersonalProfileContext | null> {
   try {
-    const supabase = await createClient();
+    const supabase = supabaseClient ?? (await createClient());
     const { data, error } = await supabase
       .from("user_personal_profiles")
       .select("*")
@@ -73,8 +77,20 @@ export async function upsertUserPersonalProfile(
 
   if (error) {
     console.error("[personalProfile] upsert failed:", error);
+    await trackFailureEvent({
+      userId,
+      eventName: "personal_profile_failed",
+      feature: "profile",
+      reason: "save_failed",
+    });
     return { success: false, error: "保存个人信息失败，请稍后重试" };
   }
+
+  await trackEvent({
+    userId,
+    eventName: "personal_profile_saved",
+    metadata: { feature: "profile" },
+  });
 
   return { success: true };
 }

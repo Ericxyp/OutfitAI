@@ -1,39 +1,377 @@
 # OutfitAI
 
-OutfitAI 是一个 **AI 私人穿搭顾问** MVP。用户可以保存自己的衣服，在首页通过聊天描述穿搭需求，AI 根据衣橱中的结构化数据生成中文穿搭建议。
+OutfitAI 是一个 **AI 私人穿搭顾问** Web 应用。用户上传自己的衣服、描述穿搭场景，系统结合衣橱、天气、个人画像与穿搭知识，生成可解释的中文搭配建议，并支持旅行规划、购物分析与基础产品指标追踪。
 
-> **LLM 说明：** MVP 使用 [Qwen3-VL-Plus](https://help.aliyun.com/zh/model-studio/)（DashScope OpenAI 兼容 API）进行衣服图片识别与穿搭推荐。所有 AI 调用均在服务端执行。
+> **定位：** 面向「衣橱里有衣服，但不知道怎么搭」的用户 — 上班族、学生、短途出行人群。  
+> **形态：** Next.js Web 应用 + Expo 移动端 MVP（`apps/mobile`）。  
+> **LLM：** [Qwen3-VL-Plus](https://help.aliyun.com/zh/model-studio/)（DashScope OpenAI 兼容 API），所有 AI 调用在服务端执行。
 
 ---
 
-## MVP 功能
+## 1. 项目简介
 
-| 模块 | 功能 |
+### 解决什么问题
+
+- 衣橱里衣服不少，但每天仍不知道穿什么
+- 场景多变（通勤、约会、旅行、购物），缺少结构化搭配建议
+- 普通 Chatbot 容易「编造不存在的衣服」，缺乏可落地的衣橱约束
+- 用户偏好难以沉淀，推荐难以越用越准
+
+### 产品价值
+
+OutfitAI 把「衣橱数据 + 场景理解 + 规则召回 + 轻量 RAG 知识 + LLM 组合解释」串成一条完整链路：
+
+1. 先约束在**真实衣橱**内选品，降低幻觉
+2. 再注入**天气、风格画像、个人信息、穿搭知识**，提高专业度
+3. 通过**反馈与事件日志**持续优化体验，并支持校招/面试场景下的效果展示与复盘
+
+---
+
+## 2. 核心功能
+
+| 模块 | 路径 | 说明 |
+|------|------|------|
+| 数字衣橱 | `/closet` | 单件上传、Qwen Vision 识别属性、分类筛选、详情、删除；图片存 Supabase Storage |
+| AI 穿搭推荐 | `/` | 自然语言输入需求，从衣橱生成搭配；支持当前位置天气；结果保存至 `outfit_recommendations` |
+| 天气推荐 | 首页 | 基于浏览器定位 + WeatherAPI；失败时降级为普通推荐，不阻断主流程 |
+| Memory 风格画像 | `/profile/style` | 喜欢/不喜欢/收藏更新 `user_style_profiles`；可查看画像并重新生成 AI 风格总结 |
+| 个人信息画像 | `/profile/personal` | 身高、体重、年龄、性别、体型备注、穿衣目标、尺码备注、不想强调的部位 |
+| 旅行穿搭规划 | `/travel` | 目的地、日期、天数、目的、风格偏好、少带衣服；生成 Day1-DayN 穿搭 + 打包清单 |
+| 购物助手 | `/shopping` | 上传商品图分析兼容度、可搭配套数、购买建议与风险（**不支持**电商链接解析） |
+| 历史记录 | `/history` | 普通推荐、旅行规划、购物分析历史列表 |
+| 产品数据 | `/profile/metrics` | 基于 `event_logs` 的基础指标：接受率、功能使用、最近事件等 |
+| 收藏 | `/saved` | 查看已收藏的穿搭推荐 |
+
+---
+
+## 3. 产品流程
+
+```mermaid
+flowchart LR
+  A[上传衣服] --> B[Qwen Vision 识别]
+  B --> C[建立数字衣橱]
+  C --> D[用户输入穿搭需求]
+  D --> E[规则召回候选单品]
+  E --> F[RAG 知识检索]
+  F --> G[注入天气 / 画像 / 知识]
+  G --> H[Qwen 生成推荐]
+  H --> I[结果校验与文本清洗]
+  I --> J[保存推荐]
+  J --> K[用户反馈]
+  K --> L[Memory 更新风格画像]
+  L --> M[Analytics 记录事件]
+```
+
+---
+
+## 4. AI Workflow
+
+推荐主链路采用 **轻量 Workflow**，而非 LangGraph 多 Agent：
+
+```
+Server Action → Workflow → Services / AI / Supabase
+```
+
+以普通穿搭推荐为例（`lib/ai/workflows/outfit-workflow.ts`）：
+
+| 步骤 | 模块 | 作用 |
+|------|------|------|
+| 1. 需求解析 | `rule-engine` | 从自然语言提取场合、风格线索 |
+| 2. 天气上下文 | `lib/weather.ts` | 可选；失败则跳过 |
+| 3. 画像读取 | `style-profile` / `personal-profile` | 风格偏好 + 个人信息 |
+| 4. 衣橱召回 | `closet-retriever` | 规则过滤 + **hybrid（规则 + embedding）** 候选集 |
+| 5. 候选排序 | `ranking` | 场景/天气/偏好打分 + 类别覆盖 |
+| 6. RAG 知识 | `retrieve-style-knowledge` | **关键词 + embedding 混合**检索穿搭知识（最多 6 条） |
+| 7. LLM 生成 | `generate-outfit` | Qwen 组合搭配并生成中文解释 |
+| 8. 结果校验 | `sanitize-visible-ai-text` | 防止 UUID、知识库字段泄露 |
+| 9. 持久化 | Supabase | 写入 `outfit_recommendations` |
+| 10. 埋点 | `trackEvent` | 写入 `event_logs`（失败不阻断） |
+
+旅行规划（`/travel`）与购物助手（`/shopping`）沿用相同「Workflow + Qwen + Supabase」模式，但 **RAG 知识尚未完全接入**（代码中已预留 TODO）。
+
+---
+
+## 5. 推荐系统设计
+
+### 设计原则：LLM 不负责全部决策
+
+| 层级 | 职责 |
 |------|------|
-| 登录 | Supabase Auth 邮箱 Magic Link 登录 |
-| 衣橱 | 上传衣服图片、AI 识别属性、分类筛选、详情与删除 |
-| 首页 Chatbox | 输入穿搭需求，AI 从衣橱中选品生成推荐；支持基于定位和天气的智能推荐 |
-| 旅行规划 | `/travel` 多日穿搭计划 + 打包清单，结合天气预报与风格画像 |
-| 购物助手 | `/shopping` 上传商品图，分析是否值得买、可搭配套数与组合方案 |
-| 推荐反馈 | 喜欢 / 不太合适 / 收藏，沉淀为基础风格画像 |
-| 我的 | 衣橱 / 收藏 / 喜欢统计，风格画像，收藏列表 |
-| 收藏页 | 查看已保存的穿搭推荐 |
+| 规则召回 | 过滤不喜欢单品、按场景/天气/偏好打分 |
+| Ranking | 平衡类别覆盖（上装/下装/外套/鞋等），控制候选规模 |
+| LLM | 在候选集内做最终组合与自然语言解释 |
+
+### 为什么这样设计
+
+- **降低幻觉：** `selected_item_ids` 必须来自真实衣橱
+- **提高场景适配：** 规则层先处理通勤/约会/雨天/高温等硬约束
+- **控制成本与稳定性：** 候选集 8–20 件，而非把整柜衣物直接丢给模型
+- **可评测：** 离线断言可检查 id 合法性、天气冲突、偏好冲突等
 
 ---
 
-## 技术栈
+## 6. RAG Style Knowledge Base
 
-- **框架：** Next.js 15（App Router）+ TypeScript
-- **样式：** Tailwind CSS v4
-- **后端：** Supabase（Auth、Postgres、Storage）
-- **AI：** Qwen3-VL-Plus（DashScope OpenAI 兼容 API，通过 `openai` SDK 调用）
-- **部署：** 支持 Vercel 等 Node 环境
+### 当前实现：Hybrid RAG（关键词 + pgvector）
+
+| 项目 | 说明 |
+|------|------|
+| 数据表 | `style_knowledge_entries`（13 条 seed 知识） |
+| 检索方式 | **关键词打分 + embedding 语义相似度** 混合排序 |
+| 向量存储 | Supabase Postgres `pgvector`（1024 维） |
+| 接入范围 | 普通推荐 / 旅行 / 购物 workflow（经 `retrieveStyleKnowledge`） |
+| 降级策略 | embedding API 或 RPC 失败时，自动回退关键词检索 |
+
+### 知识覆盖
+
+通勤、约会、旅行、商务正式、高温、低温、雨天、显高、显瘦、遮肉、低饱和简约、色彩协调、鞋包配饰。
+
+### 检索逻辑（`lib/knowledge/retrieve-style-knowledge.ts`）
+
+1. 从 `query`、场合、天气、画像提取关键词并打分
+2. 对 query 文本生成 embedding，调用 `match_style_knowledge_entries` RPC
+3. 合并：`keywordScore + embeddingSimilarity × 20`，返回 Top 6
+4. 任一步失败不阻断推荐，回退到纯关键词逻辑
+
+### Embedding 回填
+
+知识库 seed 不会自动写入向量，需执行：
+
+```bash
+npm run backfill:style-knowledge-embeddings
+```
+
+### 测试
+
+```bash
+npm run test:style-knowledge
+```
+
+> 脚本通过 `npx tsx` 运行；`tsx` 尚未加入 `devDependencies`，首次运行会自动拉取。
 
 ---
 
-## 环境变量配置
+## 7. Memory 与用户画像
 
-复制示例文件并填入实际值：
+### 风格画像（`user_style_profiles`）
+
+| 反馈 | 影响 |
+|------|------|
+| 喜欢 / 收藏 | 强化偏好风格、颜色、场合；记录喜爱单品 |
+| 不喜欢 | 记录回避风格、颜色；记录不喜欢单品 |
+
+- 反馈提交后异步更新画像（`lib/memory/update-style-profile.ts`）
+- 推荐时注入风格画像到 prompt
+- `/profile/style` 展示画像 + AI 风格总结（可手动重新生成）
+
+### 个人信息（`user_personal_profiles`）
+
+支持身高、体重、年龄、性别、体型备注、穿衣目标（显高/显瘦/舒适等）、尺码备注、不想强调的部位。
+
+- 推荐时参考个人信息
+- AI 文案遵守安全规范：不评价身材、不使用羞辱性表达
+
+---
+
+## 8. Analytics 指标体系
+
+### 已实现（第一版）
+
+| 组件 | 说明 |
+|------|------|
+| `event_logs` 表 | 服务端事件日志，`metadata` 仅存非敏感统计字段 |
+| `event-schema.ts` | 事件名、失败原因枚举、`normalizeFailureReason`、中文 label |
+| `trackEvent` / `trackFailureEvent` | 写入失败仅 `console.warn`，不影响主流程 |
+| `/profile/metrics` | 产品数据页 |
+
+### 已埋点事件
+
+`closet_item_created`、`closet_item_failed`、`outfit_generated`、`recommendation_failed`、`feedback_submitted`、`feedback_failed`、`travel_plan_generated`、`travel_plan_failed`、`shopping_check_generated`、`shopping_check_failed`、`personal_profile_saved`、`personal_profile_failed`、`style_profile_updated`、`style_profile_failed`
+
+### 页面指标
+
+| 指标 | 说明 |
+|------|------|
+| 衣橱总数 / 推荐生成 / 旅行 / 购物 | 基础使用量 |
+| **推荐接受率** | (喜欢 + 收藏) / 推荐生成数 |
+| **满意度** | (喜欢 + 收藏) / 总反馈数（与接受率不同） |
+| 正向 / 负向反馈 | like+save / dislike |
+| **近 7 日接受率趋势** | 按日统计生成数与接受数 |
+| **失败原因 Top 6** | 标准化 `metadata.reason` 聚合 |
+| 反馈原因标签 | 来自 `feedback.reason_tags`（如有） |
+| 常用功能 / 最近事件 | 行为概览 |
+
+### metadata 规范
+
+失败事件统一包含 `feature` + `reason`（标准化枚举，非原始错误文案）。不保存完整 requestText、图片 URL、API Key 或 exception stack。
+
+### 尚未实现（后续规划）
+
+7 日留存、Precision@K、Recall@K、转化率漏斗等完整商业指标。
+
+---
+
+## 9. 旅行规划与购物助手
+
+### 旅行穿搭规划 `/travel`
+
+**输入：** 目的地、开始日期、天数（1–10）、旅行目的、风格偏好、是否少带衣服
+
+**处理：**
+1. 读取用户衣橱（≥3 件）
+2. 获取目的地天气预报（失败可降级）
+3. 读取风格画像 + 个人信息
+4. Qwen 生成每日穿搭 + 打包清单
+
+**输出：** Day1–DayN 穿搭方案、打包清单（上装/下装/外套/鞋/配饰）
+
+**存储：** `travel_plans`、`travel_plan_days`
+
+### 购物搭配助手 `/shopping`
+
+**输入：** 商品图片（JPG/PNG/WebP，≤5MB）；可选商品名称、价格、品牌等备注
+
+**限制：** **不支持**淘宝/京东/小红书链接解析，仅支持商品图上传
+
+**处理：**
+1. Qwen Vision 识别商品属性
+2. 结合衣橱 + 风格画像 + 个人信息分析兼容性
+3. 输出购买建议与搭配方案
+
+**输出：** 兼容度评分、可搭配套数、buy/consider/skip 建议、原因、风险、搭配组合
+
+**存储：** `shopping_checks`（商品图存 Storage `{user_id}/shopping/`）
+
+### 购物点击转化 MVP（Web）
+
+购物分析完成后，系统会基于 `product_recommendations` 商品库规则推荐 3–4 个外部单品卡片。用户点击「去购买」时：
+
+1. 先请求 `POST /api/commerce/click` 记录点击
+2. 再在新标签页打开商品链接
+
+**说明：** 当前只做**点击转化追踪**，不含成交、支付、佣金结算。商品库为空时，购物分析主流程不受影响。
+
+**手动测试：** 执行 `supabase/schema.sql` 后，单独运行 `seed-products.sql`（5 条示例商品），再在 `/shopping` 完成一次分析。
+
+---
+
+## 10. 评测集与质量保障
+
+### 离线场景化回归评测集
+
+```bash
+npm run eval:recommendations
+```
+
+| 文件 | 作用 |
+|------|------|
+| `scripts/eval-recommendations.ts` | 评测主脚本 |
+| `scripts/eval-fixtures.ts` | 10 个 mock 场景 + mock 衣橱/画像 |
+| `lib/eval/assertions.ts` | 规则断言 |
+| `lib/eval/types.ts` | 类型定义 |
+
+### 覆盖场景（10 个）
+
+通勤、约会、雨天通勤、高温正式、周末出游、显高、显瘦、不想太正式、旅行轻便穿搭、重要会议等。
+
+### 断言检查（rule-based）
+
+- 可见文案无 UUID / id 泄露
+- `selected_item_ids` 全部存在于 mock 衣橱
+- 不包含用户不喜欢单品
+- 至少选 2 件衣服
+- 天气合理性（高温避厚重、雨天避麂皮等）
+- 场景标签合理性（通勤/约会/出游）
+
+### 环境变量
+
+| 变量 | 说明 |
+|------|------|
+| `EVAL_LIMIT=3` | 只跑前 N 个 case |
+| `EVAL_CASE=rainy-commute` | 只跑单个 case |
+| 无 `QWEN_API_KEY` | 跳过 AI 评测，exit 0 |
+
+> 评测**不写入数据库**，直接调用 `generateOutfit` + `retrieveClosetCandidatesSafe`。
+
+---
+
+## 11. 技术架构
+
+```
+┌─────────────────────────────────────────────┐
+│  Next.js 15 App Router (Web)                │
+│  Server Actions + Server Components         │
+├─────────────────────────────────────────────┤
+│  Workflow Layer                             │
+│  outfit / travel / shopping workflows       │
+├─────────────────────────────────────────────┤
+│  Services                                   │
+│  recommendation · knowledge · memory ·      │
+│  analytics · weather                        │
+├─────────────────────────────────────────────┤
+│  AI (Qwen3-VL-Plus via openai SDK)          │
+├─────────────────────────────────────────────┤
+│  Supabase                                   │
+│  Auth · Postgres · Storage · RLS            │
+└─────────────────────────────────────────────┘
+```
+
+### 架构选择原因
+
+| 选择 | 原因 |
+|------|------|
+| Next.js 全栈 | 校招可演示完整链路，部署简单（Vercel） |
+| Supabase | Auth + 数据库 + 图片存储一站式，RLS 保证多用户隔离 |
+| 轻量 Workflow 而非 LangGraph | MVP 阶段流程清晰可控，易于调试和评测 |
+| 规则 + LLM 分层 | 降低幻觉，断言可覆盖硬规则 |
+| Hybrid Retrieval | 规则召回保底，pgvector 增强语义匹配；失败自动降级 |
+
+### pgvector / Embedding Search（第一版）
+
+| 组件 | 说明 |
+|------|------|
+| `pgvector` extension | Supabase Postgres 向量扩展 |
+| `closet_items.embedding` | 衣物语义向量（上传时异步生成） |
+| `style_knowledge_entries.embedding` | 知识条目语义向量（backfill 脚本生成） |
+| `match_closet_items` RPC | 用户衣橱 cosine 相似度 Top-K |
+| `match_style_knowledge_entries` RPC | 知识库 cosine 相似度 Top-K |
+| `lib/ai/embeddings.ts` | DashScope `text-embedding-v4`（默认 1024 维） |
+
+**衣橱混合召回公式：** `finalScore = ruleScore × 0.7 + embeddingSimilarity × 30`
+
+**注意：** 这不是训练好的推荐模型，而是第一版语义增强；无 embedding 时完全回退规则召回。
+
+### 未采用
+
+FastAPI 独立后端、LangGraph Agent Orchestrator、React Native 移动端。
+
+---
+
+## 12. 数据库设计
+
+执行 `supabase/schema.sql` 后主要表：
+
+| 表 | 用途 |
+|----|------|
+| `profiles` | 用户基础信息 |
+| `closet_items` | 数字衣橱 |
+| `outfit_recommendations` | 穿搭推荐记录 |
+| `feedback` | 喜欢/不喜欢/收藏 |
+| `user_style_profiles` | 风格画像（Memory） |
+| `user_personal_profiles` | 个人信息画像 |
+| `travel_plans` | 旅行计划 |
+| `travel_plan_days` | 每日旅行穿搭 |
+| `shopping_checks` | 购物分析记录 |
+| `event_logs` | 产品事件日志（Analytics） |
+| `style_knowledge_entries` | 穿搭知识库（RAG） |
+
+所有用户数据表均启用 **Row Level Security**，用户只能访问自己的数据。
+
+---
+
+## 13. 本地运行
+
+### 环境变量
 
 ```bash
 cp .env.local.example .env.local
@@ -43,290 +381,298 @@ cp .env.local.example .env.local
 |------|------|
 | `NEXT_PUBLIC_SUPABASE_URL` | Supabase 项目 URL |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase 匿名公钥 |
-| `SUPABASE_SERVICE_ROLE_KEY` | Supabase 服务端密钥（可选，管理任务用） |
-| `NEXT_PUBLIC_SITE_URL` | 本地 `http://localhost:3000`，生产环境改为正式域名 |
-| `QWEN_API_KEY` | 阿里云 DashScope API Key |
-| `QWEN_BASE_URL` | 兼容模式 Base URL，默认 `https://dashscope.aliyuncs.com/compatible-mode/v1` |
-| `QWEN_MODEL` | 模型名，默认 `qwen3-vl-plus` |
-| `WEATHER_API_KEY` | 天气 API Key（服务端调用，用于定位天气推荐） |
-| `WEATHER_API_BASE_URL` | 天气 API Base URL，默认 `https://api.weatherapi.com/v1` |
-| `NEXT_PUBLIC_APP_NAME` | 应用名称，默认 `OutfitAI` |
+| `SUPABASE_SERVICE_ROLE_KEY` | 服务端密钥（可选） |
+| `NEXT_PUBLIC_SITE_URL` | 本地 `http://localhost:3000` |
+| `QWEN_API_KEY` | DashScope API Key |
+| `QWEN_BASE_URL` | 默认 `https://dashscope.aliyuncs.com/compatible-mode/v1` |
+| `QWEN_MODEL` | 默认 `qwen3-vl-plus` |
+| `EMBEDDING_MODEL` | 默认 `text-embedding-v4` |
+| `EMBEDDING_DIMENSIONS` | 默认 `1024`（需与 schema vector 维度一致） |
+| `WEATHER_API_KEY` | 天气 API Key（可选） |
+| `WEATHER_API_BASE_URL` | 默认 WeatherAPI.com |
 
----
+### Supabase 配置
 
-## Supabase 配置步骤
-
-### 1. 创建项目
-
-1. 登录 [Supabase Dashboard](https://supabase.com/dashboard)
-2. 新建项目，记录 **Project URL** 和 **API Keys**
-
-### 2. 执行数据库 Schema
-
-在 **SQL Editor** 中执行：
-
-```
-supabase/schema.sql
-```
-
-将创建：
-
-- `profiles`、`closet_items`、`outfit_recommendations`、`feedback`、`user_style_profiles`、`travel_plans`、`travel_plan_days`、`shopping_checks` 表
-- Row Level Security 策略
-- Storage bucket `closet`（衣服图片）
-- 新用户自动创建 profile 的 Trigger
-
-### 3. 配置 Auth
-
-1. **Authentication → Providers → Email**：开启 Email 登录，开发阶段建议关闭 **Confirm email**
-2. **Authentication → URL Configuration**：
-   - Site URL：`http://localhost:3000`
-   - Redirect URLs：`http://localhost:3000/auth/callback`
-3. **Authentication → Email Templates → Magic Link**（必改，否则 Sign in 链接容易 PKCE 失败）：
-   ```html
-   <h2>登录 OutfitAI</h2>
-   <p>点击下方按钮登录，链接仅可使用一次。</p>
-   <p><a href="{{ .SiteURL }}/auth/callback?token_hash={{ .TokenHash }}&type=magiclink">Sign in</a></p>
-   ```
-   使用 `token_hash` 直链后，点击邮件 Sign in 可在任意浏览器完成登录，不依赖 PKCE。
-
-### 4. （可选）导入 Demo 数据
-
-先在本应用完成一次登录注册，然后在 SQL Editor 执行 `supabase/seed.sql`（需将脚本中的 `demo_user_id` 替换为你的用户 UUID）。详见 [Demo 数据](#demo-数据可选)。
-
----
-
-## Qwen / DashScope 配置步骤
-
-1. 前往 [阿里云百炼 / DashScope](https://dashscope.console.aliyun.com/) 创建 API Key
-2. 将 Key 填入 `.env.local` 的 `QWEN_API_KEY`
-3. 使用默认配置即可：
+1. 创建 Supabase 项目
+2. 在 **SQL Editor** 执行 `supabase/schema.sql`（可重复执行）
+   - 含 `vector` extension、`embedding` 字段、RPC、`event_logs`、`style_knowledge_entries` 及 13 条知识 seed
+   - 含 Storage bucket `closet`、RLS、Triggers
+   - 末尾 `notify pgrst, 'reload schema'`
+3. 执行 embedding 回填（需 `QWEN_API_KEY` + `SUPABASE_SERVICE_ROLE_KEY`）：
 
 ```bash
-QWEN_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-QWEN_MODEL=qwen3-vl-plus
+npm run backfill:style-knowledge-embeddings
+npm run backfill:closet-embeddings
 ```
 
-4. 验证连接：
+> 新上传衣服会自动尝试生成 embedding；历史数据需 backfill。
+3. **Authentication → Providers → Email**：开启邮箱登录
+4. **URL Configuration**：
+   - Site URL: `http://localhost:3000`
+   - Redirect URLs: `http://localhost:3000/auth/callback`
+5. **Email Templates → Magic Link** 建议使用 `token_hash` 直链（见下方常见问题）
+
+### 启动
 
 ```bash
-npm run test:qwen
-```
-
-5. 修改 `.env.local` 后需 **重启** `npm run dev`
-
-API Key **仅存在于服务端**，不会暴露到浏览器。
-
----
-
-## 天气推荐能力
-
-首页支持**基于定位和天气**的穿搭推荐：
-
-1. 用户点击「使用当前位置」，浏览器 Geolocation API 获取经纬度（需用户主动授权）
-2. 服务端根据经纬度调用天气 API（`lib/weather.ts`），获取温度、天气、湿度、风速等
-3. AI 推荐时会结合天气上下文和规则提示，在推荐理由中解释天气适配原因
-4. 天气信息会保存到 `outfit_recommendations.model_output.weather`
-
-**降级策略：**
-- 用户拒绝定位 → 正常推荐，不使用天气
-- 未配置 `WEATHER_API_KEY` → 正常推荐
-- 天气 API 失败或超时 → 正常推荐，不向用户报错
-
-**隐私说明：**
-- 浏览器定位仅用于本次推荐请求
-- `WEATHER_API_KEY` 只在服务端使用，不会暴露到客户端
-
-### 天气 API 配置（可选）
-
-默认适配 [WeatherAPI.com](https://www.weatherapi.com/)：
-
-```bash
-WEATHER_API_KEY=你的天气 API Key
-WEATHER_API_BASE_URL=https://api.weatherapi.com/v1
-```
-
-更换供应商时，修改 `lib/weather.ts` 中的 `normalizeWeatherApiResponse()` 字段映射即可。
-
----
-
-## Memory 系统（风格画像）
-
-OutfitAI 会根据你的反馈逐步学习风格偏好：
-
-| 反馈 | 影响 |
-|------|------|
-| 喜欢 / 收藏 | 更新 `preferred_styles`、`preferred_colors`、`preferred_occasions`、`favorite_item_ids` |
-| 不太合适 | 更新 `avoid_styles`、`avoid_colors`、`disliked_item_ids` |
-
-- 数据保存在 Supabase 表 `user_style_profiles`
-- 后续穿搭推荐会在 AI prompt 中注入「用户风格画像」
-- 「我的」页面可查看当前风格画像
-- `/profile/style` 可查看完整风格画像，并重新生成 AI 风格总结
-- Memory 更新失败不会影响反馈提交
-
-在 Supabase SQL Editor 执行 `supabase/schema.sql` 后会创建 `user_style_profiles` 表（含 RLS）。
-
-### 风格画像页面 `/profile/style`
-
-登录后访问 **我的 → 穿搭偏好**，或直达 `/profile/style`：
-
-- 展示常用风格、偏好颜色、常用场景、不喜欢元素
-- 统计最常出现在推荐中的 Top 5 单品
-- 显示 AI 生成的个人风格总结（基于真实反馈数据，服务端调用 Qwen）
-- 支持「重新生成我的风格总结」
-
-风格总结生成逻辑读取 `user_style_profiles`、`feedback`、`outfit_recommendations`、`closet_items`，`QWEN_API_KEY` 仅在服务端使用。
-
-### 旅行穿搭规划 `/travel`
-
-登录后从 **我的 → 旅行穿搭规划** 进入，或访问 `/travel`：
-
-- 输入目的地、出发日期、天数（1-10）、旅行目的、风格偏好
-- 可选「尽量少带衣服」，AI 会规划复用策略
-- 结合 **天气预报**（`getForecastByDestination`）+ 衣橱 + 风格画像生成 Day1-DayN 穿搭
-- 输出打包清单（上装/下装/外套/鞋子/配饰）
-- 计划保存到 `travel_plans` 和 `travel_plan_days`
-
-**降级策略：**
-- 天气 API 失败 → 仍生成旅行计划，不阻断
-- 衣橱不足（<3 件）→ 提示去添加衣服
-
-### 购物搭配助手 `/shopping`
-
-登录后从 **我的 → 购物搭配助手** 进入，或访问 `/shopping`：
-
-- **第一版仅支持商品图片上传**，不支持淘宝/小红书/京东等商品链接
-- 上传想购买的商品图片（JPG / PNG / WebP，最大 5MB）
-- 可选填写商品名称、价格、品牌、链接备注、你的问题
-- 服务端调用 **Qwen Vision** 识别商品属性（类别、颜色、风格、材质、季节、版型）
-- 结合衣橱 + 风格画像输出：
-  - 推荐指数（0-100）
-  - 预计可搭配套数
-  - 推荐购买：buy（推荐购买）/ consider（谨慎考虑）/ skip（不建议购买）
-  - 原因、风险、可搭配组合
-- 分析记录保存到 `shopping_checks` 表
-- 商品图片上传到 Storage `closet` bucket 的 `{user_id}/shopping/` 路径
-
-**降级策略：**
-- 风格画像读取失败 → 不阻断分析
-- Qwen 或识别失败 → 友好错误提示
-
----
-
-## 本地运行
-
-```bash
-# 安装依赖
 npm install
-
-# 开发模式
 npm run dev
 ```
 
-浏览器打开 [http://localhost:3000](http://localhost:3000)，建议用 Chrome DevTools 切换到 iPhone 视口（375px）体验移动端 UI。
+浏览器打开 [http://localhost:3000](http://localhost:3000)。建议 Chrome DevTools 切换 iPhone 视口（375px）体验移动端 UI。
 
 ```bash
-# 生产构建验证
+# 验证构建
 npm run build
-npm start
+
+# 验证 Qwen 连接
+npm run test:qwen
+
+# 验证 RAG 知识检索
+npm run test:style-knowledge
+
+# 离线推荐评测（需 QWEN_API_KEY）
+npm run eval:recommendations
+
+# 回填 embedding（需 QWEN_API_KEY + SUPABASE_SERVICE_ROLE_KEY）
+npm run backfill:style-knowledge-embeddings
+npm run backfill:closet-embeddings
 ```
+
+> 脚本通过 `npx tsx` 运行。如需稳定本地执行，可安装：`npm install -D tsx`
+
+修改 `.env.local` 后需 **重启** `npm run dev`。
+
+### Demo 种子数据（可选）
+
+示例数据已拆分：`seed-products.sql` 只导入购物推荐商品（无需 user_id）；`seed-demo-user.sql` 导入 demo 衣橱/推荐（需先替换 user_id）。`seed.sql` 仅为说明入口，不会插入数据。
 
 ---
 
-## Demo 演示流程
+## 14. Demo 演示流程
 
-完整演示约 **3 分钟**，路径如下：
+完整演示约 **5–8 分钟**，适合校招 / AI 产品岗面试：
 
-| 步骤 | 页面 | 操作 |
+| 步骤 | 路径 | 操作 |
 |------|------|------|
-| 1 | `/login` | 输入邮箱 → 获取登录链接 → 邮件中点击登录 |
-| 2 | `/closet` | 点击「添加」→ 上传 3 件衣服（名称 + 分类即可） |
-| 3 | `/` | 点击快捷提问如「约会想温柔一点」，或输入自定义需求 |
-| 4 | 首页推荐卡片 | 查看 AI 搭配结果 → 点击「收藏」 |
-| 5 | `/profile` | 查看统计 →「收藏的穿搭」确认已保存 |
+| 1 | `/login` | 邮箱 Magic Link 登录 |
+| 2 | `/closet/new` | 上传 3+ 件衣服（AI 自动识别属性） |
+| 3 | `/profile/personal` | 填写身高、穿衣目标等（可选） |
+| 4 | `/` | 输入「今天上班穿什么」；可开启「使用当前位置」体验天气推荐 |
+| 5 | 推荐卡片 | 查看搭配 → 点喜欢 / 收藏 / 不喜欢 |
+| 6 | `/profile/style` | 查看风格画像 → 重新生成 AI 风格总结 |
+| 7 | `/travel` | 输入目的地 + 天数，生成旅行穿搭计划 |
+| 8 | `/shopping` | 上传商品图，查看购买建议与搭配方案 |
+| 9 | `/history` | 查看推荐 / 旅行 / 购物历史 |
+| 10 | `/profile/metrics` | 查看产品数据：接受率、事件日志 |
+| 11 | `/saved` | 确认收藏穿搭已保存 |
 
-也可访问 **`/demo`** 查看应用内演示指南。
-
-### 快捷 Demo（使用 Seed 数据）
-
-若已执行 `seed.sql`，登录对应账号后衣橱已有 5 件示例衣服，可直接从步骤 3 开始演示 AI 推荐。
-
----
-
-## Demo 数据（可选）
-
-文件：`supabase/seed.sql`
-
-包含：
-
-- 5 条 `closet_items` 示例（placeholder 图片 URL）
-- 2 条 `outfit_recommendations` 示例
-- 1 条 `feedback`（收藏）示例
-
-**使用步骤：**
-
-1. 先在应用中用邮箱登录一次（创建 `auth.users` 记录）
-2. 在 Supabase SQL Editor 查询你的用户 ID：
-
-```sql
-SELECT id, email FROM auth.users ORDER BY created_at DESC LIMIT 5;
-```
-
-3. 打开 `supabase/seed.sql`，将 `REPLACE_WITH_YOUR_USER_ID` 替换为上述 UUID
-4. 在 SQL Editor 执行整个脚本
+也可访问 `/demo` 查看应用内演示指南。
 
 ---
 
-## 项目结构（简要）
+## 15. 当前限制与后续规划
+
+### 未实现
+
+| 能力 | 状态 |
+|------|------|
+| React Native 移动端 | 未实现，当前为 Next.js Web |
+| FastAPI 独立后端 | 未实现，使用 Server Actions |
+| LangGraph 真 Agent Orchestrator | 未实现，轻量 Workflow |
+| 批量衣柜照片识别 | 未实现，仅单件上传 |
+| 淘宝/京东/小红书链接解析 | 未实现 |
+| 自动同步购物记录 | 未实现 |
+| AI 虚拟试穿图 | 未实现 |
+| AR 试穿 | 未实现 |
+| 商业推荐 / 佣金闭环 | 未实现 |
+| 社交分享 | 未实现 |
+| 完整商业指标（留存、Precision@K 等） | 未实现 |
+
+### 后续优先方向
+
+1. 扩大知识库规模并优化 embedding 召回权重
+2. 旅行/购物场景独立评测集
+3. 移动端功能深化（旅行、购物、Analytics 原生页）
+
+---
+
+## 项目结构
 
 ```
-app/                  # 页面路由
-  page.tsx            # 首页 Chatbox
-  closet/             # 衣橱
-  profile/            # 我的
-  saved/              # 收藏
-  demo/               # 演示指南
-components/           # UI 组件
+app/
+  page.tsx                 # 首页 Chatbox 推荐
+  closet/                  # 数字衣橱
+  travel/                  # 旅行规划
+  shopping/                # 购物助手
+  history/                 # 历史记录
+  profile/
+    style/                 # 风格画像
+    personal/              # 个人信息
+    metrics/               # 产品数据
+  saved/                   # 收藏
+  api/mobile/              # 移动端 API Gateway（Bearer 鉴权）
+components/                # UI 组件
 lib/
-  ai/                 # Qwen 调用（穿搭推荐 + 图片识别）
-  actions/            # Server Actions
-  supabase/           # Supabase 客户端
+  ai/                      # Qwen 调用 + workflows
+  recommendation/          # 规则召回 + hybrid embedding
+  knowledge/               # RAG 混合检索 + embedding 更新
+  ai/embeddings.ts         # DashScope embedding API
+  memory/                  # 风格/个人画像
+  analytics/               # trackEvent + event-schema + get-metrics
+  eval/                    # 评测断言
+  actions/                 # Server Actions
+scripts/
+  eval-recommendations.ts  # 离线推荐评测
+  eval-fixtures.ts         # 评测 mock 数据
+  test-style-knowledge.ts  # RAG 检索测试
+  backfill-closet-embeddings.ts
+  backfill-style-knowledge-embeddings.ts
 supabase/
-  schema.sql          # 数据库 Schema
-  seed.sql            # Demo 种子数据
+  schema.sql               # 数据库 Schema + 知识 seed
+  seed.sql                 # Seed 说明入口（不插数据）
+  seed-products.sql        # 购物推荐示例商品
+  seed-demo-user.sql       # Demo 衣橱/推荐（需 user_id）
+  cleanup-demo-closet.sql  # 清理误导入的 demo 衣橱
+apps/
+  mobile/                  # Expo React Native 移动端 MVP
 ```
 
 ---
 
-## 当前不做的功能
+## React Native / Expo 移动端
 
-以下能力**不在 MVP 范围内**，后续迭代再考虑：
+移动端位于 `apps/mobile`，与 Web 共用同一 Supabase 项目与数据，通过 Next.js API Routes 作为 **Mobile API Gateway**，不在客户端调用 Qwen / Weather / Service Role。
 
-- **Multi-Agent** — 多 Agent 协作编排
-- **RAG** — 检索增强生成
-- **Vector Database** — 向量数据库 / 语义检索
-- **复杂 Memory** — 长期记忆与用户偏好学习
-- **复杂推荐系统** — 协同过滤、排序模型等
+### 功能范围（MVP）
+
+| 模块 | 状态 | 说明 |
+|------|------|------|
+| 登录 | ✅ | Supabase Magic Link（Email OTP） |
+| 首页 AI 穿搭推荐 | ✅ | 调用 `POST /api/mobile/recommendations` |
+| 衣橱列表 | ✅ | 调用 `GET /api/mobile/closet` |
+| 添加衣服 | ✅ | 图片上传 + 服务端 Qwen 识别（`POST /api/mobile/closet/upload`） |
+| 喜欢 / 不喜欢 / 收藏 | ✅ | 调用 `POST /api/mobile/feedback` |
+| 我的 | ✅ | 基础统计 + 画像入口 |
+| 旅行穿搭规划 | ✅ | 调用 `POST /api/mobile/travel` |
+| 购物助手 | ✅ | 调用 `POST /api/mobile/shopping` |
+| 风格画像 / 个人信息 | ✅ | 只读展示（编辑暂用 Web） |
+| 产品数据 | 🔜 | Coming soon，可跳转 Web |
+
+### 目录结构
+
+```
+apps/mobile/
+  App.tsx
+  app.json
+  package.json
+  src/
+    lib/           # supabase.ts, api.ts
+    screens/       # Login, Home, Closet, AddClothing, Profile, ...
+    components/    # AppButton, OutfitCard, ...
+    navigation/    # RootNavigator, BottomTabs
+    types/         # 轻量 API 类型
+```
+
+### 环境变量
+
+移动端**仅允许**以下变量（复制 `apps/mobile/.env.example` 为 `.env`）：
+
+```bash
+EXPO_PUBLIC_SUPABASE_URL=
+EXPO_PUBLIC_SUPABASE_ANON_KEY=
+EXPO_PUBLIC_API_BASE_URL=http://localhost:3000
+```
+
+**禁止**在移动端出现：`QWEN_API_KEY`、`WEATHER_API_KEY`、`SUPABASE_SERVICE_ROLE_KEY`。
+
+真机调试时，`EXPO_PUBLIC_API_BASE_URL` 需改为电脑局域网 IP（如 `http://192.168.1.10:3000`），并确保 Next.js 以 `npm run dev` 运行。
+
+### 启动方式
+
+```bash
+# 1. 启动 Web（API Gateway）
+npm run dev
+
+# 2. 启动移动端
+cd apps/mobile
+npm install
+npm run start
+```
+
+TypeScript 检查：
+
+```bash
+cd apps/mobile && npm run typecheck
+```
+
+### Deep Link 配置（Magic Link 登录）
+
+1. Supabase Dashboard → Authentication → URL Configuration，添加 Redirect URL：
+   - `outfitai://auth/callback`
+2. `app.json` 已配置 `scheme: "outfitai"`
+3. 用户点击邮件 Magic Link 后，App 通过 `outfitai://auth/callback` 恢复 session
+
+若 Deep Link 暂未配置，可先发送 Magic Link 邮件，完成 Web 端同邮箱登录后，移动端 session 结构已就绪（需同一设备完成链接跳转）。
+
+### Mobile API Routes
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/mobile/recommendations` | AI 穿搭推荐（Bearer 鉴权） |
+| GET | `/api/mobile/closet` | 衣橱列表 |
+| POST | `/api/mobile/closet/upload` | 上传衣服 + Qwen 识别 |
+| POST | `/api/mobile/feedback` | 喜欢 / 不喜欢 / 收藏 |
+| GET | `/api/mobile/profile` | 用户画像与统计 |
+| POST | `/api/mobile/travel` | 旅行穿搭规划 |
+| POST | `/api/mobile/shopping` | 购物助手分析 |
+
+所有接口从 `Authorization: Bearer <access_token>` 读取身份，复用现有 workflow，不使用 service role 绕过 RLS。
+
+### 当前限制
+
+- 画像编辑、Analytics 暂用 Web
+- 无复杂状态管理（无 Redux / Zustand）
+- 添加衣服失败时可跳转 Web `/closet/add` 作为临时方案
+- `apps/mobile` 为独立 Expo 项目，非 monorepo workspace
+
+### 后续计划
+
+- 完善 Deep Link 与 Magic Link 一键登录体验
+- 历史记录、产品数据原生页面
+- 共享类型包（可选 monorepo 改造）
 
 ---
 
 ## 常见问题
 
 **Q：AI 推荐提示衣橱不够？**  
-需要至少 3 件 `status = ready` 的衣服。去衣橱页添加，或执行 `seed.sql`。
+至少需要 3 件 `status = ready` 的衣服，或执行 `seed-demo-user.sql` 导入示例数据（先替换 user_id）。
 
 **Q：Magic Link 登录失败？**  
-检查 Supabase Redirect URLs 是否包含 `http://localhost:3000/auth/callback`。
+检查 Supabase Redirect URLs 是否包含 `http://localhost:3000/auth/callback`。Email Template 建议使用：
 
-**Q：图片上传失败？**  
-确认已执行 `schema.sql` 中的 Storage bucket `closet` 及 RLS 策略。
+```html
+<a href="{{ .SiteURL }}/auth/callback?token_hash={{ .TokenHash }}&type=magiclink">Sign in</a>
+```
 
-**Q：Qwen 调用失败或超时？**  
-检查 `QWEN_API_KEY` 是否有效、DashScope 余额/配额是否充足，并运行 `npm run test:qwen` 排查。修改环境变量后需重启 `npm run dev`。
+**Q：天气推荐不生效？**  
+检查 `WEATHER_API_KEY`、浏览器定位授权。天气失败会自动降级，不影响普通推荐。
+
+**Q：购物助手支持商品链接吗？**  
+不支持。当前仅支持上传商品图片。
+
+**Q：评测脚本需要联网吗？**  
+`eval:recommendations` 默认真实调用 Qwen；无 API Key 时自动跳过。`test:style-knowledge` 为本地 mock 测试，无需 API Key。
+
+**Q：产品数据页没有数据？**  
+需先执行最新 `schema.sql` 创建 `event_logs` 表，并完成登录后使用各功能产生事件。
+
+**Q：上传了食物/风景/宠物等非衣物图片？**  
+系统会在 AI 识别阶段判断 `is_clothing`。非穿戴类图片不能加入衣橱；Web 端会隐藏「放进衣橱」按钮，Server Action 与移动端上传接口也会二次校验并拒绝保存。可运行 `npm run test:clothing-gate` 查看规则测试与手动测试说明。
 
 ---
 
 ## License
 
-Private MVP — 仅供演示与内部开发使用。
+Private project — 仅供演示、校招作品展示与内部开发使用。

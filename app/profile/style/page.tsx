@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { RegenerateStyleSummaryButton } from "@/components/regenerate-style-summary-button";
 import { PageHeader } from "@/components/ui/page-states";
+import { aggregateReasonTagStats } from "@/lib/feedback/reason-tag-stats";
 import { getUserStyleProfile } from "@/lib/memory/style-profile";
 import { createClient } from "@/lib/supabase/server";
 import type { ClosetItem } from "@/types/database";
@@ -112,6 +113,13 @@ export default async function StyleProfilePage() {
 
   const styleProfile = await getUserStyleProfile(user.id);
 
+  const { data: feedbackRows } = await supabase
+    .from("feedback")
+    .select("reason_tags")
+    .eq("user_id", user.id);
+
+  const reasonTagStats = aggregateReasonTagStats(feedbackRows ?? [], 5);
+
   const { data: recommendations } = await supabase
     .from("outfit_recommendations")
     .select("selected_item_ids")
@@ -175,6 +183,24 @@ export default async function StyleProfilePage() {
           <RegenerateStyleSummaryButton />
         </div>
       </section>
+
+      {reasonTagStats.length > 0 && (
+        <section className="mb-4 rounded-2xl bg-card p-5 shadow-sm ring-1 ring-border/60">
+          <h2 className="text-sm font-medium text-foreground">最近反馈原因</h2>
+          <p className="mt-1 text-xs text-muted">来自你点选的原因标签</p>
+          <div className="mt-3 flex flex-wrap gap-1.5">
+            {reasonTagStats.map(({ tag, count }) => (
+              <span
+                key={tag}
+                className="rounded-full bg-accent px-2.5 py-1 text-xs text-foreground"
+              >
+                {tag}
+                <span className="ml-1 text-muted">×{count}</span>
+              </span>
+            ))}
+          </div>
+        </section>
+      )}
 
       <section className="mb-4 space-y-4 rounded-2xl bg-card p-5 shadow-sm ring-1 ring-border/60">
         <h2 className="text-sm font-medium text-foreground">偏好标签</h2>

@@ -4,11 +4,16 @@ import {
 } from "@/lib/ai/generate-travel-plan";
 import { QWEN_UNAVAILABLE_RECOMMENDATION } from "@/lib/ai/qwen";
 import { MIN_CLOSET_FOR_AI } from "@/lib/constants";
+import { trackEvent } from "@/lib/analytics/track-event";
+import { trackFailureEvent } from "@/lib/analytics/track-failure";
+import type { FailureReason } from "@/lib/analytics/event-schema";
+import { retrieveStyleKnowledge } from "@/lib/knowledge/retrieve-style-knowledge";
 import { getUserPersonalProfile } from "@/lib/memory/personal-profile";
 import { getUserStyleProfile } from "@/lib/memory/style-profile";
 import { getForecastByDestination } from "@/lib/weather";
 import { createClient } from "@/lib/supabase/server";
-import type { ClosetItem } from "@/types/database";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import type { ClosetItem, Database } from "@/types/database";
 import type { WeatherContext } from "@/types/weather";
 
 export type TravelPurpose =
@@ -27,6 +32,8 @@ export type TravelWorkflowInput = {
   purpose?: TravelPurpose | string;
   stylePreference?: string;
   packLight?: boolean;
+  /** Bearer-authenticated client for mobile API routes */
+  supabase?: SupabaseClient<Database>;
 };
 
 export type TravelDayResult = {
@@ -55,13 +62,33 @@ export type TravelPlanResult = {
 const INSUFFICIENT_CLOSET_MESSAGE =
   "你的衣橱还不够丰富，建议先添加至少 3 件衣服，我才能为你规划旅行穿搭。";
 
-function addDaysToDate(startDate: string, offsetDays: number): string {
-  const date = new Date(`${startDate}T00:00:00`);
-  date.setDate(date.getDate() + offsetDays);
-  return date.toISOString().slice(0, 10);
+async function trackTravelPlanFailed(
+  userId: string,
+  reason: FailureReason,
+  context: {
+    days: number;
+    hasWeather?: boolean;
+    hasStyleProfile?: boolean;
+    hasPersonalProfile?: boolean;
+    packLight?: boolean;
+  }
+) {
+  await trackFailureEvent({
+    userId,
+    eventName: "travel_plan_failed",
+    feature: "travel",
+    reason,
+    metadata: {
+      days: context.days,
+      hasWeather: context.hasWeather ?? false,
+      hasStyleProfile: context.hasStyleProfile ?? false,
+      hasPersonalProfile: context.hasPersonalProfile ?? false,
+      packLight: context.packLight ?? false,
+    },
+  });
 }
 
-function classifyTravelPlanFailure(error: unknown): string {
+function mapTravelFailureReason(error: unknown): FailureReason {
   const errorMessage = error instanceof Error ? error.message : String(error);
 
   if (
@@ -69,26 +96,28 @@ function classifyTravelPlanFailure(error: unknown): string {
     errorMessage.includes("未返回内容") ||
     errorMessage.includes("API")
   ) {
-    return "qwen_api";
+    return "qwen_unavailable";
   }
 
-  if (errorMessage.includes("格式")) {
-    return "ai_json_format";
-  }
-
-  if (errorMessage.includes("内部编号")) {
-    return "visible_id_leak";
+  if (errorMessage.includes("格式") || errorMessage.includes("内部编号")) {
+    return "invalid_ai_output";
   }
 
   if (errorMessage.includes("无效") || error instanceof TypeError) {
-    return "invalid_item_ids";
+    return "invalid_ai_output";
   }
 
   if (errorMessage.includes("失败")) {
-    return "travel_plan_generation_failed";
+    return "travel_generation_failed";
   }
 
   return "unknown";
+}
+
+function addDaysToDate(startDate: string, offsetDays: number): string {
+  const date = new Date(`${startDate}T00:00:00`);
+  date.setDate(date.getDate() + offsetDays);
+  return date.toISOString().slice(0, 10);
 }
 
 export async function runTravelWorkflow(
@@ -99,15 +128,17 @@ export async function runTravelWorkflow(
 > {
   const destination = input.destination.trim();
   if (!destination) {
+    await trackTravelPlanFailed(input.userId, "unknown", { days: input.days });
     return { success: false, error: "请填写目的地" };
   }
 
   const days = Math.floor(input.days);
   if (days < 1 || days > 10) {
+    await trackTravelPlanFailed(input.userId, "unknown", { days });
     return { success: false, error: "旅行天数需在 1-10 天之间" };
   }
 
-  const supabase = await createClient();
+  const supabase = input.supabase ?? (await createClient());
 
   const { data: closetItems, error: closetError } = await supabase
     .from("closet_items")
@@ -117,10 +148,12 @@ export async function runTravelWorkflow(
     .order("created_at", { ascending: false });
 
   if (closetError || !closetItems) {
+    await trackTravelPlanFailed(input.userId, "closet_read_failed", { days });
     return { success: false, error: "读取衣橱失败，请稍后重试" };
   }
 
   if (closetItems.length < MIN_CLOSET_FOR_AI) {
+    await trackTravelPlanFailed(input.userId, "insufficient_closet", { days });
     return {
       success: false,
       error: INSUFFICIENT_CLOSET_MESSAGE,
@@ -129,10 +162,26 @@ export async function runTravelWorkflow(
   }
 
   const [styleProfile, personalProfile] = await Promise.all([
-    getUserStyleProfile(input.userId),
-    getUserPersonalProfile(input.userId),
+    getUserStyleProfile(input.userId, supabase),
+    getUserPersonalProfile(input.userId, supabase),
   ]);
   const weatherContext = await getForecastByDestination({ destination, days });
+
+  const weatherSummary = weatherContext
+    ? weatherContext
+        .map((w) => `${w.condition} ${w.temperatureC}°C`)
+        .join("；")
+    : undefined;
+
+  const styleKnowledge = await retrieveStyleKnowledge({
+    supabase,
+    query: `${destination} ${days}天旅行 ${input.purpose ?? ""} ${input.stylePreference ?? ""}`,
+    occasion: `旅行、${input.purpose ?? ""}`,
+    weatherSummary,
+    styleProfile,
+    personalProfile,
+    limit: 6,
+  });
 
   console.log("[travelWorkflow] calling generateTravelPlan", {
     destination,
@@ -140,6 +189,7 @@ export async function runTravelWorkflow(
     hasWeather: weatherContext !== null,
     hasStyleProfile: styleProfile !== null && styleProfile.feedbackCount > 0,
     hasPersonalProfile: personalProfile !== null,
+    styleKnowledgeCount: styleKnowledge.length,
     packLight: Boolean(input.packLight),
   });
 
@@ -154,6 +204,7 @@ export async function runTravelWorkflow(
       weatherForecast: weatherContext,
       styleProfile,
       personalProfile,
+      styleKnowledge,
       closetItems,
     });
 
@@ -190,6 +241,14 @@ export async function runTravelWorkflow(
       .sort((a, b) => a.dayIndex - b.dayIndex);
 
     if (dayPlans.length === 0) {
+      await trackTravelPlanFailed(input.userId, "travel_generation_failed", {
+        days,
+        hasWeather: weatherContext !== null,
+        hasStyleProfile:
+          styleProfile !== null && styleProfile.feedbackCount > 0,
+        hasPersonalProfile: personalProfile !== null,
+        packLight: Boolean(input.packLight),
+      });
       return { success: false, error: "未能生成有效的旅行穿搭计划，请稍后重试" };
     }
 
@@ -210,6 +269,14 @@ export async function runTravelWorkflow(
 
     if (planError || !savedPlan) {
       console.error("[travelWorkflow] save plan failed", planError);
+      await trackTravelPlanFailed(input.userId, "save_failed", {
+        days,
+        hasWeather: weatherContext !== null,
+        hasStyleProfile:
+          styleProfile !== null && styleProfile.feedbackCount > 0,
+        hasPersonalProfile: personalProfile !== null,
+        packLight: Boolean(input.packLight),
+      });
       return { success: false, error: "保存旅行计划失败，请稍后重试" };
     }
 
@@ -231,8 +298,32 @@ export async function runTravelWorkflow(
     if (daysError) {
       console.error("[travelWorkflow] save days failed", daysError);
       await supabase.from("travel_plans").delete().eq("id", savedPlan.id);
+      await trackTravelPlanFailed(input.userId, "save_failed", {
+        days,
+        hasWeather: weatherContext !== null,
+        hasStyleProfile:
+          styleProfile !== null && styleProfile.feedbackCount > 0,
+        hasPersonalProfile: personalProfile !== null,
+        packLight: Boolean(input.packLight),
+      });
       return { success: false, error: "保存旅行计划失败，请稍后重试" };
     }
+
+    await trackEvent({
+      userId: input.userId,
+      eventName: "travel_plan_generated",
+      entityType: "travel_plan",
+      entityId: savedPlan.id,
+      metadata: {
+        destination,
+        days,
+        hasWeather: weatherContext !== null,
+        hasStyleProfile:
+          styleProfile !== null && styleProfile.feedbackCount > 0,
+        hasPersonalProfile: personalProfile !== null,
+        packLight: Boolean(input.packLight),
+      },
+    });
 
     console.log("[travelWorkflow] success", { planId: savedPlan.id });
 
@@ -254,12 +345,21 @@ export async function runTravelWorkflow(
     const errorName = error instanceof Error ? error.name : "UnknownError";
     const errorMessage =
       error instanceof Error ? error.message : String(error);
-    const failureReason = classifyTravelPlanFailure(error);
+    const failureReason = mapTravelFailureReason(error);
 
     console.error("[travelWorkflow] generateTravelPlan failed", {
       failureReason,
       errorName,
       errorMessage,
+    });
+
+    await trackTravelPlanFailed(input.userId, failureReason, {
+      days,
+      hasWeather: weatherContext !== null,
+      hasStyleProfile:
+        styleProfile !== null && styleProfile.feedbackCount > 0,
+      hasPersonalProfile: personalProfile !== null,
+      packLight: Boolean(input.packLight),
     });
 
     return { success: false, error: QWEN_UNAVAILABLE_RECOMMENDATION };

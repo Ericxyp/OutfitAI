@@ -9,6 +9,10 @@ import {
   type PersonalProfileContext,
 } from "@/lib/memory/personal-profile";
 import {
+  formatStyleKnowledgeForPrompt,
+  type StyleKnowledgeEntry,
+} from "@/lib/knowledge/style-knowledge";
+import {
   containsVisibleId,
   sanitizeVisibleAiText,
 } from "@/lib/text/sanitize-visible-ai-text";
@@ -46,6 +50,7 @@ export type GenerateTravelPlanInput = {
   weatherForecast: WeatherContext[] | null;
   styleProfile: StyleProfileContext | null;
   personalProfile?: PersonalProfileContext | null;
+  styleKnowledge?: StyleKnowledgeEntry[];
   closetItems: ClosetItem[];
 };
 
@@ -58,7 +63,8 @@ function buildSystemPrompt(
   hasWeather: boolean,
   hasStyleProfile: boolean,
   hasPersonalProfile: boolean,
-  packLight: boolean
+  packLight: boolean,
+  hasStyleKnowledge: boolean
 ): string {
   const packLightRules = packLight
     ? `
@@ -81,6 +87,14 @@ function buildSystemPrompt(
 - ${PERSONAL_PROFILE_SAFETY_RULES}`
     : "";
 
+  const knowledgeRules = hasStyleKnowledge
+    ? `
+- 可参考穿搭知识生成 Day1-DayN 穿搭、打包清单和理由，但不要原样照抄
+- 不要在用户可见内容中出现知识库编号、style_knowledge_entries、priority、tags、category 等字段名或 UUID
+- 若穿搭知识与用户真实衣橱冲突，必须以用户衣橱为准
+- 旅行规划要结合天气、目的地、旅行目的、少带衣服策略和用户风格画像`
+    : "";
+
   return `你是 OutfitAI 的中文旅行穿搭规划师。
 
 规则：
@@ -89,7 +103,7 @@ function buildSystemPrompt(
 3. title、summary、reasoning、packing_list 中禁止出现 UUID、数据库 id、「id:」「item_id」
 4. 用户可见文案只能使用衣服 name 称呼单品
 5. 每一天尽量完整：上装、下装、鞋子，必要时外套/配饰
-6. 避免每天完全相同，也避免毫无复用${packLightRules}${weatherRules}${styleRules}${personalRules}
+6. 避免每天完全相同，也避免毫无复用${packLightRules}${weatherRules}${styleRules}${personalRules}${knowledgeRules}
 7. 如果衣橱不足以满足所有天数，在 packing_list.notes 中说明复用策略
 8. reasoning 必须解释天气、场景、风格适配（如有天气数据）
 9. 输出中文，必须输出严格 JSON，不要 markdown
@@ -188,6 +202,13 @@ function buildUserPrompt(
 ${formatWeatherContextBlock(w)}
 天气穿搭提示：${buildWeatherGuidance(w)}`;
     }
+  }
+
+  const styleKnowledgeBlock = formatStyleKnowledgeForPrompt(
+    input.styleKnowledge ?? []
+  );
+  if (styleKnowledgeBlock) {
+    prompt += `\n\n${styleKnowledgeBlock}`;
   }
 
   prompt += `
@@ -488,6 +509,7 @@ async function callQwenTravelPlan(
   const hasPersonalProfile = hasPersonalProfileData(
     input.personalProfile ?? null
   );
+  const hasStyleKnowledge = Boolean(input.styleKnowledge?.length);
 
   console.log("[generateTravelPlan] request start", {
     model: getQwenModel(),
@@ -495,6 +517,7 @@ async function callQwenTravelPlan(
     hasWeather,
     hasStyleProfile,
     hasPersonalProfile,
+    styleKnowledgeCount: input.styleKnowledge?.length ?? 0,
     packLight: Boolean(input.packLight),
     retryContext,
   });
@@ -508,7 +531,8 @@ async function callQwenTravelPlan(
           hasWeather,
           hasStyleProfile,
           hasPersonalProfile,
-          Boolean(input.packLight)
+          Boolean(input.packLight),
+          hasStyleKnowledge
         ),
       },
       { role: "user", content: buildUserPrompt(input, retryContext) },

@@ -4,6 +4,21 @@ const UUID_PATTERN =
 const ID_LABEL_PATTERN = /id\s*[:：]/i;
 const ITEM_ID_PATTERN = /item_id/i;
 const SELECTED_ITEM_IDS_PATTERN = /selected_item_ids/i;
+const KNOWLEDGE_LEAK_PATTERNS = [
+  /style_knowledge_entries/i,
+  /知识库第\s*\d+\s*条/,
+  /根据知识库/,
+  /\bpriority\b/i,
+  /\btags\b/i,
+];
+
+export function containsVisibleTechnicalLeak(text: string): boolean {
+  if (!text) {
+    return false;
+  }
+
+  return KNOWLEDGE_LEAK_PATTERNS.some((pattern) => pattern.test(text));
+}
 
 export function containsVisibleId(text: string): boolean {
   if (!text) return false;
@@ -11,7 +26,8 @@ export function containsVisibleId(text: string): boolean {
     UUID_PATTERN.test(text) ||
     ID_LABEL_PATTERN.test(text) ||
     ITEM_ID_PATTERN.test(text) ||
-    SELECTED_ITEM_IDS_PATTERN.test(text)
+    SELECTED_ITEM_IDS_PATTERN.test(text) ||
+    containsVisibleTechnicalLeak(text)
   );
 }
 
@@ -26,6 +42,10 @@ export function sanitizeVisibleAiText(text: string): string {
     .replace(/\(?\s*id\s*[:：]\s*[0-9a-f-]+\s*\)?/gi, "")
     .replace(/item_id/gi, "")
     .replace(/selected_item_ids/gi, "")
+    .replace(/style_knowledge_entries/gi, "")
+    .replace(/知识库第\s*\d+\s*条/g, "")
+    .replace(/根据知识库/g, "")
+    .replace(/\bpriority\b/gi, "")
     .replace(/\s{2,}/g, " ")
     .replace(/\s+([，。；、])/g, "$1")
     .trim();

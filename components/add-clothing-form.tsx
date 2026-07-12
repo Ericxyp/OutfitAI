@@ -172,7 +172,26 @@ export function AddClothingForm({ options }: { options: ClothingOptions }) {
   const [occasionTags, setOccasionTags] = useState<string[]>([]);
   const [aiStatus, setAiStatus] = useState<string | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isNonClothing, setIsNonClothing] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const resetImageState = () => {
+    setPreview(null);
+    setSelectedFile(null);
+    setAiStatus(null);
+    setIsNonClothing(false);
+    setName("");
+    setCategory("");
+    setColor("");
+    setMaterial("");
+    setNotes("");
+    setStyleTags([]);
+    setSeasonTags([]);
+    setOccasionTags([]);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  };
 
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -180,11 +199,15 @@ export function AddClothingForm({ options }: { options: ClothingOptions }) {
       setPreview(URL.createObjectURL(file));
       setSelectedFile(file);
       setAiStatus(null);
+      setIsNonClothing(false);
     } else {
-      setPreview(null);
-      setSelectedFile(null);
-      setAiStatus(null);
+      resetImageState();
     }
+  };
+
+  const handleReupload = () => {
+    resetImageState();
+    fileInputRef.current?.click();
   };
 
   const handleAiRecognize = async () => {
@@ -203,9 +226,17 @@ export function AddClothingForm({ options }: { options: ClothingOptions }) {
 
       if (!result.success) {
         setAiStatus(result.error);
+        setIsNonClothing(false);
         return;
       }
 
+      if (!result.data.is_clothing) {
+        setIsNonClothing(true);
+        setAiStatus(PAGE_COPY.addClothing.notClothing);
+        return;
+      }
+
+      setIsNonClothing(false);
       applyAnalysis(result.data, {
         setName,
         setCategory,
@@ -234,12 +265,14 @@ export function AddClothingForm({ options }: { options: ClothingOptions }) {
       ? "text-muted"
       : aiStatus === PAGE_COPY.addClothing.aiAnalyzing
         ? "text-muted"
-        : aiStatus?.startsWith("Qwen 识别") ||
-            aiStatus?.startsWith("Qwen 识别失败")
-          ? "text-red-500"
-          : aiStatus
-            ? "text-amber-600"
-            : "text-muted";
+        : aiStatus === PAGE_COPY.addClothing.notClothing
+          ? "text-amber-700"
+          : aiStatus?.startsWith("Qwen 识别") ||
+              aiStatus?.startsWith("Qwen 识别失败")
+            ? "text-red-500"
+            : aiStatus
+              ? "text-amber-600"
+              : "text-muted";
 
   return (
     <form action={formAction} className="space-y-5">
@@ -299,8 +332,20 @@ export function AddClothingForm({ options }: { options: ClothingOptions }) {
         {aiStatus && (
           <p className={`mt-2 text-xs ${aiStatusTone}`}>{aiStatus}</p>
         )}
+
+        {isNonClothing && (
+          <button
+            type="button"
+            onClick={handleReupload}
+            className="mt-3 w-full rounded-2xl border border-border bg-card py-3 text-sm font-medium text-foreground transition-opacity hover:bg-accent"
+          >
+            {PAGE_COPY.addClothing.reupload}
+          </button>
+        )}
       </div>
 
+      {!isNonClothing && (
+        <>
       <div>
         <label htmlFor="name" className="mb-1.5 block text-sm font-medium text-foreground">
           名称
@@ -421,6 +466,8 @@ export function AddClothingForm({ options }: { options: ClothingOptions }) {
       >
         {pending ? PAGE_COPY.addClothing.saving : PAGE_COPY.addClothing.save}
       </button>
+        </>
+      )}
     </form>
   );
 }

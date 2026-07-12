@@ -9,16 +9,27 @@ import {
   type ShoppingOutfitIdea,
 } from "@/lib/ai/generate-shopping-check";
 import { formatQwenError } from "@/lib/ai/qwen";
+import { trackEvent } from "@/lib/analytics/track-event";
+import { trackFailureEvent } from "@/lib/analytics/track-failure";
+import type { FailureReason } from "@/lib/analytics/event-schema";
 import { CLOSET_STORAGE_BUCKET, MIN_CLOSET_FOR_AI } from "@/lib/constants";
+import { retrieveStyleKnowledge } from "@/lib/knowledge/retrieve-style-knowledge";
+import {
+  getProductRecommendationsForShoppingCheck,
+  type ProductRecommendation,
+} from "@/lib/commerce/product-recommendations";
 import { getUserPersonalProfile } from "@/lib/memory/personal-profile";
 import { getUserStyleProfile } from "@/lib/memory/style-profile";
 import { createClient } from "@/lib/supabase/server";
-import type { ClosetItem } from "@/types/database";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import type { ClosetItem, Database } from "@/types/database";
 
 export type ShoppingWorkflowInput = {
   userId: string;
   image: File;
   userInput?: ShoppingUserInput;
+  /** Bearer-authenticated client for mobile API routes */
+  supabase?: SupabaseClient<Database>;
 };
 
 export type ShoppingWorkflowOutfitIdea = {
@@ -39,6 +50,7 @@ export type ShoppingWorkflowResult = {
   reasons: string[];
   risks: string[];
   outfitIdeas: ShoppingWorkflowOutfitIdea[];
+  recommendedProducts: ProductRecommendation[];
 };
 
 const ALLOWED_IMAGE_TYPES = new Set([
@@ -62,6 +74,20 @@ const GENERATE_RECOMMENDATION_ERROR =
 
 const SAVE_SHOPPING_CHECK_ERROR =
   "保存购物分析失败，请确认 shopping_checks 表已创建";
+
+async function trackShoppingCheckFailed(
+  userId: string,
+  reason: FailureReason,
+  metadata?: Record<string, unknown>
+) {
+  await trackFailureEvent({
+    userId,
+    eventName: "shopping_check_failed",
+    feature: "shopping",
+    reason,
+    metadata,
+  });
+}
 
 async function fileToBase64(file: File): Promise<string> {
   const buffer = Buffer.from(await file.arrayBuffer());
@@ -107,21 +133,24 @@ export async function runShoppingWorkflow(
   | { success: false; error: string; needsMoreClothes?: boolean }
 > {
   if (!(input.image instanceof File) || input.image.size === 0) {
+    await trackShoppingCheckFailed(input.userId, "unknown", { hasImage: false });
     return { success: false, error: "请上传商品图片" };
   }
 
   if (input.image.size > MAX_IMAGE_SIZE) {
+    await trackShoppingCheckFailed(input.userId, "unknown", { hasImage: true });
     return { success: false, error: "图片超过 5MB" };
   }
 
   if (!ALLOWED_IMAGE_TYPES.has(input.image.type)) {
+    await trackShoppingCheckFailed(input.userId, "unknown", { hasImage: true });
     return {
       success: false,
       error: "不支持的图片格式，请使用 JPG、PNG 或 WebP。",
     };
   }
 
-  const supabase = await createClient();
+  const supabase = input.supabase ?? (await createClient());
 
   const { data: closetItems, error: closetError } = await supabase
     .from("closet_items")
@@ -131,10 +160,16 @@ export async function runShoppingWorkflow(
     .order("created_at", { ascending: false });
 
   if (closetError || !closetItems) {
+    await trackShoppingCheckFailed(input.userId, "closet_read_failed", {
+      hasImage: true,
+    });
     return { success: false, error: "读取衣橱失败，请稍后重试" };
   }
 
   if (closetItems.length < MIN_CLOSET_FOR_AI) {
+    await trackShoppingCheckFailed(input.userId, "insufficient_closet", {
+      hasImage: true,
+    });
     return {
       success: false,
       error: INSUFFICIENT_CLOSET_MESSAGE,
@@ -155,6 +190,9 @@ export async function runShoppingWorkflow(
   if (uploadError) {
     console.error("[shoppingWorkflow] image upload failed", {
       message: uploadError.message,
+    });
+    await trackShoppingCheckFailed(input.userId, "image_upload_failed", {
+      hasImage: true,
     });
     return { success: false, error: "图片上传失败，请稍后重试" };
   }
@@ -178,6 +216,9 @@ export async function runShoppingWorkflow(
       errorMessage: error instanceof Error ? error.message : String(error),
     });
     await removeUploadedImage(supabase, filePath);
+    await trackShoppingCheckFailed(input.userId, "product_analysis_failed", {
+      hasImage: true,
+    });
     return { success: false, error: PRODUCT_ANALYSIS_ERROR };
   }
 
@@ -218,22 +259,52 @@ export async function runShoppingWorkflow(
       errorMessage.includes("无法识别") ||
       errorMessage.includes("缺少 image")
     ) {
+      await trackShoppingCheckFailed(input.userId, "product_analysis_failed", {
+        hasImage: true,
+      });
       return { success: false, error: errorMessage };
     }
 
+    await trackShoppingCheckFailed(input.userId, "product_analysis_failed", {
+      hasImage: true,
+    });
     return { success: false, error: PRODUCT_ANALYSIS_ERROR };
   }
 
   const [styleProfile, personalProfile] = await Promise.all([
-    getUserStyleProfile(input.userId),
-    getUserPersonalProfile(input.userId),
+    getUserStyleProfile(input.userId, supabase),
+    getUserPersonalProfile(input.userId, supabase),
   ]);
+
+  const styleKnowledge = await retrieveStyleKnowledge({
+    supabase,
+    query: [
+      product.name,
+      product.category,
+      product.color,
+      ...(product.style_tags ?? []),
+      input.userInput?.productName,
+      input.userInput?.question,
+    ]
+      .filter(Boolean)
+      .join(" "),
+    occasion:
+      product.occasion_tags?.join("、") ||
+      product.category ||
+      input.userInput?.question ||
+      undefined,
+    weatherSummary: undefined,
+    styleProfile,
+    personalProfile,
+    limit: 6,
+  });
 
   let aiResult;
   try {
     console.log("[shoppingWorkflow] generateShoppingCheck start", {
       hasStyleProfile: styleProfile !== null && styleProfile.feedbackCount > 0,
       hasPersonalProfile: personalProfile !== null,
+      styleKnowledgeCount: styleKnowledge.length,
       closetCount: closetItems.length,
     });
 
@@ -242,6 +313,7 @@ export async function runShoppingWorkflow(
       closetItems,
       styleProfile,
       personalProfile,
+      styleKnowledge,
     });
 
     console.log("[shoppingWorkflow] generateShoppingCheck success", {
@@ -261,6 +333,11 @@ export async function runShoppingWorkflow(
     });
 
     await removeUploadedImage(supabase, filePath);
+    await trackShoppingCheckFailed(input.userId, "shopping_generation_failed", {
+      hasImage: true,
+      hasStyleProfile: styleProfile !== null && styleProfile.feedbackCount > 0,
+      hasPersonalProfile: personalProfile !== null,
+    });
     return { success: false, error: GENERATE_RECOMMENDATION_ERROR };
   }
 
@@ -304,11 +381,49 @@ export async function runShoppingWorkflow(
       code: saveError?.code,
     });
     await removeUploadedImage(supabase, filePath);
+    await trackShoppingCheckFailed(input.userId, "database_missing", {
+      hasImage: true,
+    });
     return { success: false, error: SAVE_SHOPPING_CHECK_ERROR };
   }
 
+  await trackEvent({
+    userId: input.userId,
+    eventName: "shopping_check_generated",
+    entityType: "shopping_check",
+    entityId: saved.id,
+    metadata: {
+      compatibilityScore: aiResult.compatibility_score,
+      recommendation: aiResult.recommendation,
+      matchCount: aiResult.match_count,
+      hasStyleProfile:
+        styleProfile !== null && styleProfile.feedbackCount > 0,
+      hasPersonalProfile: personalProfile !== null,
+    },
+  });
+
   console.log("[shoppingWorkflow] save shopping_checks success", {
     checkId: saved.id,
+  });
+
+  let recommendedProducts: ProductRecommendation[] = [];
+  try {
+    recommendedProducts = await getProductRecommendationsForShoppingCheck({
+      supabase,
+      productAnalysis: product,
+      styleProfile,
+      personalProfile,
+      limit: 4,
+    });
+  } catch (recommendationError) {
+    console.warn(
+      "[shoppingWorkflow] product recommendations skipped:",
+      recommendationError
+    );
+  }
+
+  console.log("[shoppingWorkflow] recommendedProductCount", {
+    count: recommendedProducts.length,
   });
 
   return {
@@ -324,6 +439,7 @@ export async function runShoppingWorkflow(
       reasons: aiResult.reasons,
       risks: aiResult.risks,
       outfitIdeas,
+      recommendedProducts,
     },
   };
 }

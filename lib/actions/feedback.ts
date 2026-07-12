@@ -1,13 +1,21 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { normalizeFeedbackReasonTags } from "@/lib/feedback/reason-tags";
 import { updateStyleProfileFromFeedback } from "@/lib/memory/update-style-profile";
+import { trackEvent } from "@/lib/analytics/track-event";
+import { trackFailureEvent } from "@/lib/analytics/track-failure";
 import { createClient } from "@/lib/supabase/server";
 import type { ClosetItem, FeedbackRating } from "@/types/database";
 
 export type FeedbackResponse =
   | { success: true; rating: FeedbackRating }
   | { success: false; error: string };
+
+export type SubmitFeedbackOptions = {
+  reasonTags?: string[];
+  comment?: string;
+};
 
 export type SavedOutfit = {
   id: string;
@@ -17,6 +25,16 @@ export type SavedOutfit = {
   savedAt: string;
   items: ClosetItem[];
 };
+
+function normalizeComment(comment?: string): string | null {
+  const trimmed = comment?.trim();
+  return trimmed ? trimmed.slice(0, 200) : null;
+}
+
+function arraysEqual(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  return a.every((value, index) => value === b[index]);
+}
 
 export async function getFeedbackRating(
   recommendationId: string
@@ -40,7 +58,8 @@ export async function getFeedbackRating(
 
 export async function submitFeedback(
   recommendationId: string,
-  rating: FeedbackRating
+  rating: FeedbackRating,
+  options?: SubmitFeedbackOptions
 ): Promise<FeedbackResponse> {
   const supabase = await createClient();
   const {
@@ -50,6 +69,12 @@ export async function submitFeedback(
   if (!user) {
     return { success: false, error: "请先登录" };
   }
+
+  const normalizedReasonTags = normalizeFeedbackReasonTags(
+    rating,
+    options?.reasonTags
+  );
+  const normalizedComment = normalizeComment(options?.comment);
 
   const { data: recommendation } = await supabase
     .from("outfit_recommendations")
@@ -64,22 +89,43 @@ export async function submitFeedback(
 
   const { data: existing } = await supabase
     .from("feedback")
-    .select("id, rating")
+    .select("id, rating, reason_tags, comment")
     .eq("user_id", user.id)
     .eq("recommendation_id", recommendationId)
     .maybeSingle();
 
   if (existing) {
-    if (existing.rating === rating) {
+    const sameRating = existing.rating === rating;
+    const sameReasonTags = arraysEqual(
+      existing.reason_tags ?? [],
+      normalizedReasonTags
+    );
+    const sameComment = (existing.comment ?? null) === normalizedComment;
+
+    if (sameRating && sameReasonTags && sameComment) {
       return { success: true, rating };
     }
 
     const { error } = await supabase
       .from("feedback")
-      .update({ rating })
+      .update({
+        rating,
+        reason_tags: normalizedReasonTags,
+        comment: normalizedComment,
+      })
       .eq("id", existing.id);
 
     if (error) {
+      await trackFailureEvent({
+        userId: user.id,
+        eventName: "feedback_failed",
+        feature: "feedback",
+        reason: "save_failed",
+        metadata: {
+          feedbackType: rating,
+          reasonTagCount: normalizedReasonTags.length,
+        },
+      });
       return { success: false, error: "提交反馈失败" };
     }
   } else {
@@ -87,21 +133,48 @@ export async function submitFeedback(
       user_id: user.id,
       recommendation_id: recommendationId,
       rating,
+      reason_tags: normalizedReasonTags,
+      comment: normalizedComment,
     });
 
     if (error) {
+      await trackFailureEvent({
+        userId: user.id,
+        eventName: "feedback_failed",
+        feature: "feedback",
+        reason: "save_failed",
+        metadata: {
+          feedbackType: rating,
+          reasonTagCount: normalizedReasonTags.length,
+        },
+      });
       return { success: false, error: "提交反馈失败" };
     }
   }
 
   revalidatePath("/profile");
+  revalidatePath("/profile/style");
   revalidatePath("/saved");
+
+  await trackEvent({
+    userId: user.id,
+    eventName: "feedback_submitted",
+    entityType: "outfit_recommendation",
+    entityId: recommendationId,
+    metadata: {
+      feedbackType: rating,
+      reasonTags: normalizedReasonTags,
+      hasComment: normalizedComment !== null,
+      feature: "feedback",
+    },
+  });
 
   try {
     await updateStyleProfileFromFeedback({
       userId: user.id,
       recommendationId,
       rating,
+      reasonTags: normalizedReasonTags,
     });
   } catch (error) {
     console.error("[feedback] style profile update failed:", error);

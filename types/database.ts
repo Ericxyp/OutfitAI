@@ -50,6 +50,9 @@ export interface Database {
           occasion_tags: string[];
           notes: string | null;
           status: ClosetItemStatus;
+          embedding: unknown | null;
+          embedding_text: string | null;
+          embedding_updated_at: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -66,6 +69,9 @@ export interface Database {
           occasion_tags?: string[];
           notes?: string | null;
           status?: ClosetItemStatus;
+          embedding?: unknown | null;
+          embedding_text?: string | null;
+          embedding_updated_at?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -82,6 +88,9 @@ export interface Database {
           occasion_tags?: string[];
           notes?: string | null;
           status?: ClosetItemStatus;
+          embedding?: unknown | null;
+          embedding_text?: string | null;
+          embedding_updated_at?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -135,6 +144,7 @@ export interface Database {
           user_id: string;
           recommendation_id: string;
           rating: FeedbackRating;
+          reason_tags: string[];
           comment: string | null;
           created_at: string;
         };
@@ -143,6 +153,7 @@ export interface Database {
           user_id: string;
           recommendation_id: string;
           rating: FeedbackRating;
+          reason_tags?: string[];
           comment?: string | null;
           created_at?: string;
         };
@@ -151,6 +162,7 @@ export interface Database {
           user_id?: string;
           recommendation_id?: string;
           rating?: FeedbackRating;
+          reason_tags?: string[];
           comment?: string | null;
           created_at?: string;
         };
@@ -351,9 +363,190 @@ export interface Database {
         };
         Relationships: [];
       };
+      product_recommendations: {
+        Row: {
+          id: string;
+          title: string;
+          brand: string | null;
+          category: string | null;
+          color: string | null;
+          style_tags: string[];
+          occasion_tags: string[];
+          price_min: number | null;
+          price_max: number | null;
+          image_url: string | null;
+          product_url: string;
+          merchant: string | null;
+          commission_type: string | null;
+          is_active: boolean;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          title: string;
+          brand?: string | null;
+          category?: string | null;
+          color?: string | null;
+          style_tags?: string[];
+          occasion_tags?: string[];
+          price_min?: number | null;
+          price_max?: number | null;
+          image_url?: string | null;
+          product_url: string;
+          merchant?: string | null;
+          commission_type?: string | null;
+          is_active?: boolean;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          title?: string;
+          brand?: string | null;
+          category?: string | null;
+          color?: string | null;
+          style_tags?: string[];
+          occasion_tags?: string[];
+          price_min?: number | null;
+          price_max?: number | null;
+          image_url?: string | null;
+          product_url?: string;
+          merchant?: string | null;
+          commission_type?: string | null;
+          is_active?: boolean;
+          created_at?: string;
+        };
+        Relationships: [];
+      };
+      commerce_clicks: {
+        Row: {
+          id: string;
+          user_id: string | null;
+          product_recommendation_id: string | null;
+          shopping_check_id: string | null;
+          source: string;
+          target_url: string;
+          metadata: Json;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          user_id?: string | null;
+          product_recommendation_id?: string | null;
+          shopping_check_id?: string | null;
+          source?: string;
+          target_url: string;
+          metadata?: Json;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          user_id?: string | null;
+          product_recommendation_id?: string | null;
+          shopping_check_id?: string | null;
+          source?: string;
+          target_url?: string;
+          metadata?: Json;
+          created_at?: string;
+        };
+        Relationships: [];
+      };
+      event_logs: {
+        Row: {
+          id: string;
+          user_id: string | null;
+          event_name: string;
+          entity_type: string | null;
+          entity_id: string | null;
+          metadata: Json;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          user_id?: string | null;
+          event_name: string;
+          entity_type?: string | null;
+          entity_id?: string | null;
+          metadata?: Json;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          user_id?: string | null;
+          event_name?: string;
+          entity_type?: string | null;
+          entity_id?: string | null;
+          metadata?: Json;
+          created_at?: string;
+        };
+        Relationships: [];
+      };
+      style_knowledge_entries: {
+        Row: {
+          id: string;
+          title: string;
+          category: string;
+          tags: string[];
+          content: string;
+          priority: number;
+          is_active: boolean;
+          embedding: unknown | null;
+          embedding_text: string | null;
+          embedding_updated_at: string | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          title: string;
+          category: string;
+          tags?: string[];
+          content: string;
+          priority?: number;
+          is_active?: boolean;
+          embedding?: unknown | null;
+          embedding_text?: string | null;
+          embedding_updated_at?: string | null;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          title?: string;
+          category?: string;
+          tags?: string[];
+          content?: string;
+          priority?: number;
+          is_active?: boolean;
+          embedding?: unknown | null;
+          embedding_text?: string | null;
+          embedding_updated_at?: string | null;
+          created_at?: string;
+        };
+        Relationships: [];
+      };
     };
     Views: Record<string, never>;
-    Functions: Record<string, never>;
+    Functions: {
+      match_closet_items: {
+        Args: {
+          query_embedding: number[];
+          match_user_id: string;
+          match_count?: number;
+        };
+        Returns: {
+          id: string;
+          similarity: number;
+        }[];
+      };
+      match_style_knowledge_entries: {
+        Args: {
+          query_embedding: number[];
+          match_count?: number;
+        };
+        Returns: {
+          id: string;
+          similarity: number;
+        }[];
+      };
+    };
     Enums: Record<string, never>;
     CompositeTypes: Record<string, never>;
   };
@@ -373,3 +566,10 @@ export type TravelPlanDay =
   Database["public"]["Tables"]["travel_plan_days"]["Row"];
 export type ShoppingCheck =
   Database["public"]["Tables"]["shopping_checks"]["Row"];
+export type ProductRecommendationRow =
+  Database["public"]["Tables"]["product_recommendations"]["Row"];
+export type CommerceClick =
+  Database["public"]["Tables"]["commerce_clicks"]["Row"];
+export type EventLog = Database["public"]["Tables"]["event_logs"]["Row"];
+export type StyleKnowledgeEntryRow =
+  Database["public"]["Tables"]["style_knowledge_entries"]["Row"];

@@ -26,8 +26,21 @@ export const ITEM_IDS = {
   silkScarf: "11111111-1111-4111-8111-111111110016",
 } as const;
 
-function item(partial: ClosetItem): ClosetItem {
-  return partial;
+function item(
+  partial: Omit<
+    ClosetItem,
+    "embedding" | "embedding_text" | "embedding_updated_at"
+  > &
+    Partial<
+      Pick<ClosetItem, "embedding" | "embedding_text" | "embedding_updated_at">
+    >
+): ClosetItem {
+  return {
+    embedding: null,
+    embedding_text: null,
+    embedding_updated_at: null,
+    ...partial,
+  };
 }
 
 export const mockClosetItems: ClosetItem[] = [

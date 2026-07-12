@@ -1,12 +1,16 @@
 import { revalidatePath } from "next/cache";
 import { generateOutfit } from "@/lib/ai/generate-outfit";
 import { QWEN_UNAVAILABLE_RECOMMENDATION } from "@/lib/ai/qwen";
+import { trackEvent } from "@/lib/analytics/track-event";
+import { trackFailureEvent } from "@/lib/analytics/track-failure";
+import type { FailureReason } from "@/lib/analytics/event-schema";
+import { retrieveStyleKnowledge } from "@/lib/knowledge/retrieve-style-knowledge";
 import { MIN_CLOSET_FOR_AI } from "@/lib/constants";
 import { getUserPersonalProfile } from "@/lib/memory/personal-profile";
 import { getUserStyleProfile } from "@/lib/memory/style-profile";
 import {
   buildRecommendationContext,
-  retrieveClosetCandidatesSafe,
+  retrieveClosetCandidatesHybridSafe,
 } from "@/lib/recommendation/closet-retriever";
 import { parseRecommendationRequirement } from "@/lib/recommendation/rule-engine";
 import { getWeatherByCoordinates } from "@/lib/weather";
@@ -23,6 +27,30 @@ import type {
 
 const INSUFFICIENT_CLOSET_MESSAGE =
   "你的衣橱还不够丰富，建议先添加至少 3 件衣服，我才能更好地帮你搭配。";
+
+async function trackRecommendationFailed(
+  userId: string,
+  reason: FailureReason,
+  context: {
+    hasWeather: boolean;
+    requestLength?: number;
+    hasStyleProfile?: boolean;
+    hasPersonalProfile?: boolean;
+  }
+) {
+  await trackFailureEvent({
+    userId,
+    eventName: "recommendation_failed",
+    feature: "outfit",
+    reason,
+    metadata: {
+      hasWeather: context.hasWeather,
+      requestLength: context.requestLength ?? 0,
+      hasStyleProfile: context.hasStyleProfile ?? false,
+      hasPersonalProfile: context.hasPersonalProfile ?? false,
+    },
+  });
+}
 
 async function resolveWeatherContext(
   location?: GenerateRecommendationOptions["location"]
@@ -71,10 +99,10 @@ async function resolveWeatherContext(
 export async function runOutfitWorkflow(
   input: OutfitWorkflowInput
 ): Promise<OutfitWorkflowResult> {
-  const { userId, requestText, options } = input;
+  const { userId, requestText, options, supabase: supabaseOverride } = input;
   const trimmed = requestText.trim();
 
-  const supabase = await createClient();
+  const supabase = supabaseOverride ?? (await createClient());
 
   const { data: closetItems, error: closetError } = await supabase
     .from("closet_items")
@@ -84,10 +112,18 @@ export async function runOutfitWorkflow(
     .order("created_at", { ascending: false });
 
   if (closetError || !closetItems) {
+    await trackRecommendationFailed(userId, "closet_read_failed", {
+      hasWeather: false,
+      requestLength: trimmed.length,
+    });
     return { success: false, error: "读取衣橱失败，请稍后重试" };
   }
 
   if (closetItems.length < MIN_CLOSET_FOR_AI) {
+    await trackRecommendationFailed(userId, "insufficient_closet", {
+      hasWeather: false,
+      requestLength: trimmed.length,
+    });
     return {
       success: false,
       error: INSUFFICIENT_CLOSET_MESSAGE,
@@ -97,11 +133,13 @@ export async function runOutfitWorkflow(
 
   const weatherContext = await resolveWeatherContext(options?.location);
   const [styleProfile, personalProfile] = await Promise.all([
-    getUserStyleProfile(userId),
-    getUserPersonalProfile(userId),
+    getUserStyleProfile(userId, supabase),
+    getUserPersonalProfile(userId, supabase),
   ]);
 
-  const retrieval = retrieveClosetCandidatesSafe({
+  const retrieval = await retrieveClosetCandidatesHybridSafe({
+    supabase,
+    userId,
     closetItems,
     requestText: trimmed,
     weatherContext,
@@ -120,14 +158,28 @@ export async function runOutfitWorkflow(
       ? retrieval.candidateItems
       : closetItems;
 
+  const styleKnowledge = await retrieveStyleKnowledge({
+    supabase,
+    query: trimmed,
+    occasion: requirement.occasionHints.join("、"),
+    weatherSummary: weatherContext
+      ? `${weatherContext.condition}，${weatherContext.temperatureC}°C`
+      : undefined,
+    styleProfile,
+    personalProfile,
+  });
+
   console.log("[outfitWorkflow] calling generateOutfit", {
     hasLocation: Boolean(options?.location),
     hasWeather: weatherContext !== null,
     hasStyleProfile: styleProfile !== null && styleProfile.feedbackCount > 0,
     hasPersonalProfile: personalProfile !== null,
+    styleKnowledgeCount: styleKnowledge.length,
     candidateCount: candidateItems.length,
     totalClosetCount: closetItems.length,
     usedRetrievalFallback: retrieval.usedFallback,
+    usedEmbeddingRetrieval: retrieval.usedEmbeddingRetrieval ?? false,
+    embeddingCandidateCount: retrieval.embeddingCandidateCount ?? 0,
   });
 
   try {
@@ -136,6 +188,7 @@ export async function runOutfitWorkflow(
       weatherContext,
       styleProfile,
       personalProfile,
+      styleKnowledge,
       recommendationContext,
       rankingDebug: retrieval.debugScores,
       fullClosetItems: closetItems,
@@ -173,8 +226,32 @@ export async function runOutfitWorkflow(
 
     if (saveError || !saved) {
       console.error("[outfitWorkflow] save failed", saveError);
+      await trackRecommendationFailed(userId, "save_failed", {
+        hasWeather: weatherContext !== null,
+        requestLength: trimmed.length,
+        hasStyleProfile:
+          styleProfile !== null && styleProfile.feedbackCount > 0,
+        hasPersonalProfile: personalProfile !== null,
+      });
       return { success: false, error: "保存推荐失败，请稍后重试" };
     }
+
+    await trackEvent({
+      userId,
+      eventName: "outfit_generated",
+      entityType: "outfit_recommendation",
+      entityId: saved.id,
+      metadata: {
+        hasWeather: weatherContext !== null,
+        hasStyleProfile:
+          styleProfile !== null && styleProfile.feedbackCount > 0,
+        hasPersonalProfile: personalProfile !== null,
+        candidateCount: candidateItems.length,
+        totalClosetCount: closetItems.length,
+        occasion: aiResult.occasion,
+        feature: "outfit",
+      },
+    });
 
     revalidatePath("/profile");
     revalidatePath("/saved");
@@ -197,6 +274,13 @@ export async function runOutfitWorkflow(
     return { success: true, recommendation };
   } catch (error) {
     console.error("[outfitWorkflow] generateOutfit failed:", error);
+    await trackRecommendationFailed(userId, "qwen_unavailable", {
+      hasWeather: weatherContext !== null,
+      requestLength: trimmed.length,
+      hasStyleProfile:
+        styleProfile !== null && styleProfile.feedbackCount > 0,
+      hasPersonalProfile: personalProfile !== null,
+    });
     return { success: false, error: QWEN_UNAVAILABLE_RECOMMENDATION };
   }
 }

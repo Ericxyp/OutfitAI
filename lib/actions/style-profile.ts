@@ -3,6 +3,8 @@
 import { revalidatePath } from "next/cache";
 import { generateStyleSummary } from "@/lib/ai/generate-style-summary";
 import { formatQwenError } from "@/lib/ai/qwen";
+import { trackEvent } from "@/lib/analytics/track-event";
+import { trackFailureEvent } from "@/lib/analytics/track-failure";
 import { getUserStyleProfile } from "@/lib/memory/style-profile";
 import { createClient } from "@/lib/supabase/server";
 import type { ClosetItem } from "@/types/database";
@@ -110,11 +112,23 @@ export async function regenerateStyleSummary(): Promise<RegenerateStyleSummaryRe
 
     if (upsertError) {
       console.error("[styleProfile] save summary failed:", upsertError);
+      await trackFailureEvent({
+        userId: user.id,
+        eventName: "style_profile_failed",
+        feature: "style_profile",
+        reason: "save_failed",
+      });
       return { success: false, error: "保存风格总结失败，请稍后重试" };
     }
 
     revalidatePath("/profile");
     revalidatePath("/profile/style");
+
+    await trackEvent({
+      userId: user.id,
+      eventName: "style_profile_updated",
+      metadata: { source: "regenerate_summary", feature: "style_profile" },
+    });
 
     console.log("[styleProfile] summary regenerated", {
       userId: user.id,
@@ -124,6 +138,12 @@ export async function regenerateStyleSummary(): Promise<RegenerateStyleSummaryRe
     return { success: true, summary };
   } catch (error) {
     console.error("[styleProfile] regenerateStyleSummary failed:", error);
+    await trackFailureEvent({
+      userId: user.id,
+      eventName: "style_profile_failed",
+      feature: "style_profile",
+      reason: "qwen_unavailable",
+    });
     return {
       success: false,
       error: `生成风格总结失败：${formatQwenError(error)}`,

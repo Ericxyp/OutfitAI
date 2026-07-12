@@ -17,6 +17,10 @@ import {
   buildWeatherGuidance,
   formatWeatherContextBlock,
 } from "@/lib/weather-guidance";
+import {
+  formatStyleKnowledgeForPrompt,
+  type StyleKnowledgeEntry,
+} from "@/lib/knowledge/style-knowledge";
 
 export interface OutfitAIResponse {
   title: string;
@@ -39,6 +43,7 @@ export type GenerateOutfitOptions = {
   weatherContext?: WeatherContext | null;
   styleProfile?: StyleProfileContext | null;
   personalProfile?: PersonalProfileContext | null;
+  styleKnowledge?: StyleKnowledgeEntry[];
   recommendationContext?: RecommendationContext | null;
   rankingDebug?: Array<{
     itemId: string;
@@ -52,7 +57,8 @@ export type GenerateOutfitOptions = {
 function buildSystemPrompt(
   hasWeather: boolean,
   hasStyleProfile: boolean,
-  hasPersonalProfile: boolean
+  hasPersonalProfile: boolean,
+  hasStyleKnowledge: boolean
 ): string {
   const weatherRules = hasWeather
     ? `
@@ -78,21 +84,44 @@ ${hasWeather ? (hasStyleProfile ? "17" : "13") : hasStyleProfile ? "11" : "7"}. 
 ${hasWeather ? (hasStyleProfile ? "18" : "14") : hasStyleProfile ? "12" : "8"}. ${PERSONAL_PROFILE_SAFETY_RULES}`
     : "";
 
+  const knowledgeRules = hasStyleKnowledge
+    ? `
+${hasWeather ? (hasStyleProfile ? (hasPersonalProfile ? "19" : "17") : hasPersonalProfile ? "15" : "13") : hasStyleProfile ? (hasPersonalProfile ? "13" : "11") : hasPersonalProfile ? "9" : "7"}. 如果提供了穿搭知识，可将其融入推荐理由，但不要原样照抄
+${hasWeather ? (hasStyleProfile ? (hasPersonalProfile ? "20" : "18") : hasPersonalProfile ? "16" : "14") : hasStyleProfile ? (hasPersonalProfile ? "14" : "12") : hasPersonalProfile ? "10" : "8"}. 不要在用户可见内容中出现知识库编号、style_knowledge_entries、priority、tags、category 等字段名或 UUID
+${hasWeather ? (hasStyleProfile ? (hasPersonalProfile ? "21" : "19") : hasPersonalProfile ? "17" : "15") : hasStyleProfile ? (hasPersonalProfile ? "15" : "13") : hasPersonalProfile ? "11" : "9"}. 若穿搭知识与用户真实衣橱冲突，必须以用户衣橱为准`
+    : "";
+
   const nextRuleBase = hasWeather
     ? hasStyleProfile
       ? hasPersonalProfile
-        ? 19
-        : 17
+        ? hasStyleKnowledge
+          ? 22
+          : 19
+        : hasStyleKnowledge
+          ? 20
+          : 17
       : hasPersonalProfile
-        ? 15
-        : 13
+        ? hasStyleKnowledge
+          ? 18
+          : 15
+        : hasStyleKnowledge
+          ? 16
+          : 13
     : hasStyleProfile
       ? hasPersonalProfile
-        ? 13
-        : 11
+        ? hasStyleKnowledge
+          ? 16
+          : 13
+        : hasStyleKnowledge
+          ? 14
+          : 11
       : hasPersonalProfile
-        ? 9
-        : 7;
+        ? hasStyleKnowledge
+          ? 12
+          : 9
+        : hasStyleKnowledge
+          ? 10
+          : 7;
 
   const idVisibilityRules = `
 ${nextRuleBase}. selected_item_ids 是唯一允许出现数据库 id 的字段
@@ -109,7 +138,7 @@ ${nextRuleBase + 4}. alternatives 中只能写衣服名称组合，禁止写「i
 3. 推荐理由要具体说明为什么这些衣服适合用户需求（颜色、材质、风格、场合等）
 4. 搭配应完整实用，尽量包含上装、下装，必要时加外套或鞋子（若衣橱中有）
 5. 输出中文
-6. 必须输出严格 JSON，不要 markdown，不要代码块，不要额外说明${weatherRules}${styleRules}${personalRules}${idVisibilityRules}
+6. 必须输出严格 JSON，不要 markdown，不要代码块，不要额外说明${weatherRules}${styleRules}${personalRules}${knowledgeRules}${idVisibilityRules}
 
 JSON 格式：
 {
@@ -195,6 +224,13 @@ ${formatWeatherContextBlock(weather)}
 ${buildWeatherGuidance(weather)}`;
   }
 
+  const styleKnowledgeBlock = formatStyleKnowledgeForPrompt(
+    options?.styleKnowledge ?? []
+  );
+  if (styleKnowledgeBlock) {
+    prompt += `\n\n${styleKnowledgeBlock}`;
+  }
+
   prompt += `
 
 用户衣橱（closet_items）：
@@ -272,12 +308,15 @@ async function callQwen(
   const hasPersonalProfile = hasPersonalProfileData(
     options?.personalProfile ?? null
   );
+  const hasStyleKnowledge = Boolean(options?.styleKnowledge?.length);
 
   console.log("[generateOutfit] request start", {
     model: getQwenModel(),
     hasWeather,
     hasStyleProfile,
     hasPersonalProfile,
+    hasStyleKnowledge,
+    styleKnowledgeCount: options?.styleKnowledge?.length ?? 0,
     retryContext: options?.retryContext,
     startTime: new Date(startTime).toISOString(),
   });
@@ -290,7 +329,8 @@ async function callQwen(
         content: buildSystemPrompt(
           hasWeather,
           hasStyleProfile,
-          hasPersonalProfile
+          hasPersonalProfile,
+          hasStyleKnowledge
         ),
       },
       {
@@ -312,6 +352,7 @@ async function callQwen(
     hasWeather,
     hasStyleProfile,
     hasPersonalProfile,
+    hasStyleKnowledge,
   });
 
   return parseModelResponse(content);
@@ -345,6 +386,7 @@ export async function generateOutfit(
     styleProfilePresent: options?.styleProfile != null,
     hasPersonalProfile,
     personalProfilePresent: options?.personalProfile != null,
+    styleKnowledgeCount: options?.styleKnowledge?.length ?? 0,
     candidateCount: closetItems.length,
     usedRetrieval: options?.recommendationContext?.usedRetrieval ?? false,
   });

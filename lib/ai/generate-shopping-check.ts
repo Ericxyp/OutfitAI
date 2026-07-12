@@ -11,6 +11,10 @@ import {
   type PersonalProfileContext,
 } from "@/lib/memory/personal-profile";
 import {
+  formatStyleKnowledgeForPrompt,
+  type StyleKnowledgeEntry,
+} from "@/lib/knowledge/style-knowledge";
+import {
   containsVisibleId,
   sanitizeVisibleAiText,
 } from "@/lib/text/sanitize-visible-ai-text";
@@ -21,6 +25,7 @@ export type GenerateShoppingCheckInput = {
   closetItems: ClosetItem[];
   styleProfile: StyleProfileContext | null;
   personalProfile?: PersonalProfileContext | null;
+  styleKnowledge?: StyleKnowledgeEntry[];
 };
 
 export type ShoppingOutfitIdea = {
@@ -169,7 +174,8 @@ function mapItemIdsToNames(
 
 function buildSystemPrompt(
   hasStyleProfile: boolean,
-  hasPersonalProfile: boolean
+  hasPersonalProfile: boolean,
+  hasStyleKnowledge: boolean
 ): string {
   const styleRules = hasStyleProfile
     ? `
@@ -180,6 +186,14 @@ function buildSystemPrompt(
     ? `
 - 参考用户个人信息与穿衣目标评估商品是否合适
 - ${PERSONAL_PROFILE_SAFETY_RULES}`
+    : "";
+
+  const knowledgeRules = hasStyleKnowledge
+    ? `
+- 可参考穿搭知识判断商品是否值得买，但不要原样照抄
+- 输出要结合商品属性、已有衣橱、用户偏好、可搭配套数、风格风险
+- 不要在用户可见内容中出现知识库编号、style_knowledge_entries、priority、tags、category 等字段名或 UUID
+- 若穿搭知识与用户真实衣橱冲突，必须以用户衣橱为准`
     : "";
 
   return `你是 OutfitAI 的中文购物搭配顾问。
@@ -196,7 +210,7 @@ function buildSystemPrompt(
 8. outfit_ideas 提供 2-4 套可搭配组合
 9. 如果衣橱不够匹配，recommendation 可为 consider 或 skip
 10. recommendation 只能是 buy（推荐购买）、consider（谨慎考虑）、skip（不建议购买）
-11. 输出中文，必须输出严格 JSON，不要 markdown${styleRules}${personalRules}
+11. 输出中文，必须输出严格 JSON，不要 markdown${styleRules}${personalRules}${knowledgeRules}
 
 JSON 格式：
 {
@@ -233,10 +247,7 @@ function buildUserPrompt(
   }));
 
   let prompt = `想购买的商品分析：
-${JSON.stringify(input.product, null, 2)}
-
-用户衣橱（closet_items）：
-${JSON.stringify(wardrobe, null, 2)}`;
+${JSON.stringify(input.product, null, 2)}`;
 
   const profile = input.styleProfile;
   const styleBlock = formatStyleProfileForPrompt(profile, {
@@ -263,7 +274,17 @@ ${JSON.stringify(wardrobe, null, 2)}`;
     prompt += `\n\n用户关心的问题：${input.product.user_input.question.trim()}`;
   }
 
+  const styleKnowledgeBlock = formatStyleKnowledgeForPrompt(
+    input.styleKnowledge ?? []
+  );
+  if (styleKnowledgeBlock) {
+    prompt += `\n\n${styleKnowledgeBlock}`;
+  }
+
   prompt += `
+
+用户衣橱（closet_items）：
+${JSON.stringify(wardrobe, null, 2)}
 
 请分析这件商品与用户衣橱的兼容性，返回严格 JSON。
 
@@ -465,11 +486,13 @@ async function callQwenShoppingCheck(
   const hasPersonalProfile = hasPersonalProfileData(
     input.personalProfile ?? null
   );
+  const hasStyleKnowledge = Boolean(input.styleKnowledge?.length);
 
   console.log("[generateShoppingCheck] request start", {
     model: getQwenModel(),
     hasStyleProfile,
     hasPersonalProfile,
+    styleKnowledgeCount: input.styleKnowledge?.length ?? 0,
     closetCount: input.closetItems.length,
     retryContext,
   });
@@ -479,7 +502,11 @@ async function callQwenShoppingCheck(
     messages: [
       {
         role: "system",
-        content: buildSystemPrompt(hasStyleProfile, hasPersonalProfile),
+        content: buildSystemPrompt(
+          hasStyleProfile,
+          hasPersonalProfile,
+          hasStyleKnowledge
+        ),
       },
       { role: "user", content: buildUserPrompt(input, retryContext) },
     ],

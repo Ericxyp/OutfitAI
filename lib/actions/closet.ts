@@ -6,6 +6,13 @@ import {
   analyzeClothing,
 } from "@/lib/ai/analyze-clothing";
 import { formatQwenError, isQwenTimeoutError } from "@/lib/ai/qwen";
+import {
+  getClothingRejectionError,
+  isAcceptableClothing,
+} from "@/lib/closet/clothing-gate";
+import { trackEvent } from "@/lib/analytics/track-event";
+import { trackFailureEvent } from "@/lib/analytics/track-failure";
+import { upsertClosetItemEmbedding } from "@/lib/closet/upsert-closet-embedding";
 import { CLOSET_STORAGE_BUCKET, PAGE_COPY } from "@/lib/constants";
 import { createClient } from "@/lib/supabase/server";
 import type { ClothingAnalysis } from "@/types/closet";
@@ -34,6 +41,28 @@ const ALLOWED_CLOSET_IMAGE_TYPES = new Set([
 ]);
 
 const MAX_CLOSET_IMAGE_SIZE = 5 * 1024 * 1024;
+
+async function analyzeUploadedImage(
+  image: File
+): Promise<AnalyzeClothingResponse> {
+  const arrayBuffer = await image.arrayBuffer();
+  const base64 = Buffer.from(arrayBuffer).toString("base64");
+
+  try {
+    const data = await analyzeClothing({
+      image_base64: base64,
+      mimeType: image.type || "image/jpeg",
+    });
+    return { success: true, data };
+  } catch (error) {
+    console.error("analyzeUploadedImage error:", error);
+    if (isQwenTimeoutError(error)) {
+      return { success: false, error: PAGE_COPY.addClothing.aiTimeout };
+    }
+    const message = formatQwenError(error);
+    return { success: false, error: `Qwen 识别失败：${message}` };
+  }
+}
 
 export async function analyzeClothingFromImage(
   formData: FormData
@@ -98,6 +127,21 @@ export async function createClosetItem(
     return { error: "不支持的图片格式，请使用 JPG、PNG 或 WebP。" };
   }
 
+  const analysisResult = await analyzeUploadedImage(image);
+  if (!analysisResult.success) {
+    return { error: analysisResult.error };
+  }
+  if (!isAcceptableClothing(analysisResult.data)) {
+    await trackFailureEvent({
+      userId: user.id,
+      eventName: "closet_item_failed",
+      feature: "closet",
+      reason: "not_clothing",
+      metadata: { hasImage: true },
+    });
+    return { error: getClothingRejectionError(analysisResult.data) };
+  }
+
   const name = formData.get("name")?.toString().trim();
   const category = formData.get("category")?.toString();
   const color = formData.get("color")?.toString().trim() || null;
@@ -144,6 +188,13 @@ export async function createClosetItem(
       message: uploadError.message,
       error: uploadError,
     });
+    await trackFailureEvent({
+      userId: user.id,
+      eventName: "closet_item_failed",
+      feature: "closet",
+      reason: "image_upload_failed",
+      metadata: { hasImage: true },
+    });
     return { error: `图片上传失败：${uploadError.message}` };
   }
 
@@ -166,13 +217,37 @@ export async function createClosetItem(
       notes,
       status: "ready",
     })
-    .select("id")
+    .select("*")
     .single();
 
   if (error || !data) {
     await supabase.storage.from(CLOSET_STORAGE_BUCKET).remove([filePath]);
+    await trackFailureEvent({
+      userId: user.id,
+      eventName: "closet_item_failed",
+      feature: "closet",
+      reason: "save_failed",
+      metadata: { hasImage: true, category },
+    });
     return { error: "保存失败，请稍后重试" };
   }
+
+  try {
+    await upsertClosetItemEmbedding(supabase, data);
+  } catch (embeddingError) {
+    console.warn("[closet] embedding update skipped:", embeddingError);
+  }
+
+  await trackEvent({
+    userId: user.id,
+    eventName: "closet_item_created",
+    entityType: "closet_item",
+    entityId: data.id,
+    metadata: {
+      category,
+      hasImage: true,
+    },
+  });
 
   revalidatePath("/closet");
   revalidatePath("/profile");

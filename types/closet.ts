@@ -8,6 +8,8 @@ export interface ClothingAnalysis {
   occasion_tags: string[];
   notes: string;
   confidence: number;
+  is_clothing: boolean;
+  rejection_reason?: string;
 }
 
 export interface ClothingOptions {

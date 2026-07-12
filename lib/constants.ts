@@ -58,6 +58,11 @@ export const PAGE_COPY = {
     imageProcessFailed: "图片处理失败，请换一张清晰的 JPG/PNG 图片。",
     imageTooLarge:
       "图片太大，请换一张更小/更清晰的图片，或先手动填写。",
+    notClothing:
+      "这张图片看起来不是衣物、鞋包或配饰，暂时不能加入衣橱。",
+    reupload: "重新上传",
+    clothingValidationFailed:
+      "无法确认图片是否为衣物，请稍后重试或换一张更清晰的照片。",
   },
   outfit: {
     occasion: "适合",

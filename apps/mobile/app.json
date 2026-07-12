@@ -1,0 +1,40 @@
+{
+  "expo": {
+    "name": "OutfitAI",
+    "slug": "outfitai",
+    "scheme": "outfitai",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "splash": {
+      "resizeMode": "contain",
+      "backgroundColor": "#fafaf8"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.outfitai.mobile"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#fafaf8"
+      },
+      "package": "com.outfitai.mobile"
+    },
+    "plugins": [
+      "expo-secure-store",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "允许 OutfitAI 访问相册以添加衣服图片。"
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "允许 OutfitAI 获取位置以结合天气推荐穿搭。"
+        }
+      ]
+    ]
+  }
+}

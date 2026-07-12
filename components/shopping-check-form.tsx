@@ -6,6 +6,7 @@ import {
   createShoppingCheck,
   type ShoppingCheckResult,
 } from "@/lib/actions/shopping";
+import { formatProductPriceRange } from "@/lib/commerce/product-recommendations";
 import { sanitizeVisibleAiText } from "@/lib/text/sanitize-visible-ai-text";
 
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
@@ -68,6 +69,106 @@ function OutfitIdeaCard({
       )}
 
       <p className="mt-3 text-sm leading-relaxed text-foreground">{summary}</p>
+    </div>
+  );
+}
+
+function RecommendedProductCard({
+  product,
+  shoppingCheckId,
+}: {
+  product: ShoppingCheckResult["recommendedProducts"][number];
+  shoppingCheckId: string;
+}) {
+  const [isClicking, setIsClicking] = useState(false);
+
+  const handlePurchaseClick = async () => {
+    if (isClicking) return;
+
+    setIsClicking(true);
+    try {
+      const response = await fetch("/api/commerce/click", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          productRecommendationId: product.id,
+          shoppingCheckId,
+          targetUrl: product.productUrl,
+          source: "shopping_check",
+        }),
+      });
+
+      const data = (await response.json()) as
+        | { success: true; redirectUrl: string }
+        | { success: false; error: string };
+
+      if (!response.ok || !data.success) {
+        throw new Error(
+          "success" in data && !data.success
+            ? data.error
+            : "跳转失败，请稍后重试"
+        );
+      }
+
+      window.open(data.redirectUrl, "_blank", "noopener,noreferrer");
+    } catch (error) {
+      console.error("[commerce] purchase click failed:", error);
+      alert(error instanceof Error ? error.message : "跳转失败，请稍后重试");
+    } finally {
+      setIsClicking(false);
+    }
+  };
+
+  return (
+    <div className="rounded-2xl bg-background p-4 ring-1 ring-border/60">
+      <div className="flex gap-3">
+        <div className="h-20 w-20 shrink-0 overflow-hidden rounded-xl bg-accent ring-1 ring-border/40">
+          {product.imageUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={product.imageUrl}
+              alt={product.title}
+              className="h-full w-full object-cover"
+              loading="lazy"
+            />
+          ) : (
+            <div className="flex h-full w-full items-center justify-center text-xs text-muted">
+              暂无图片
+            </div>
+          )}
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-medium text-foreground">{product.title}</p>
+          <p className="mt-1 text-xs text-muted">
+            {[product.brand, product.merchant].filter(Boolean).join(" · ") ||
+              "合作商品"}
+          </p>
+          <p className="mt-1 text-xs text-muted">
+            {[product.category, product.color].filter(Boolean).join(" · ")}
+          </p>
+          <p className="mt-1 text-xs text-muted">
+            {formatProductPriceRange(product.priceMin, product.priceMax)}
+          </p>
+        </div>
+      </div>
+
+      {product.matchReasons && product.matchReasons.length > 0 && (
+        <p className="mt-3 text-xs leading-relaxed text-muted">
+          推荐原因：{product.matchReasons.slice(0, 2).join("；")}
+        </p>
+      )}
+
+      <button
+        type="button"
+        onClick={(event) => {
+          event.preventDefault();
+          void handlePurchaseClick();
+        }}
+        disabled={isClicking}
+        className="mt-3 w-full rounded-2xl bg-foreground py-2.5 text-sm font-medium text-background transition-opacity hover:opacity-90 disabled:opacity-60"
+      >
+        {isClicking ? "跳转中..." : "去购买"}
+      </button>
     </div>
   );
 }
@@ -420,6 +521,24 @@ export function ShoppingCheckForm() {
               </h2>
               {result.outfitIdeas.map((idea, index) => (
                 <OutfitIdeaCard key={`idea-${index}`} idea={idea} />
+              ))}
+            </section>
+          )}
+
+          {result.recommendedProducts.length > 0 && (
+            <section className="space-y-3">
+              <h2 className="text-sm font-medium text-foreground">
+                可以看看这些单品
+              </h2>
+              <p className="text-xs text-muted">
+                基于本次商品分析与你的风格偏好，从商品库中为你挑选了可进一步了解的外部单品。
+              </p>
+              {result.recommendedProducts.map((product) => (
+                <RecommendedProductCard
+                  key={product.id}
+                  product={product}
+                  shoppingCheckId={result.id}
+                />
               ))}
             </section>
           )}

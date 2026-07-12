@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
-import type { UserStyleProfile } from "@/types/database";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import type { Database, UserStyleProfile } from "@/types/database";
 
 export type StyleProfileContext = {
   preferredStyles: string[];
@@ -28,10 +29,11 @@ function mapRowToContext(row: UserStyleProfile): StyleProfileContext {
 }
 
 export async function getUserStyleProfile(
-  userId: string
+  userId: string,
+  supabaseClient?: SupabaseClient<Database>
 ): Promise<StyleProfileContext | null> {
   try {
-    const supabase = await createClient();
+    const supabase = supabaseClient ?? (await createClient());
     const { data, error } = await supabase
       .from("user_style_profiles")
       .select("*")

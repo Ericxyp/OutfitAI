@@ -20,12 +20,34 @@ export type AnalyzeClothingInput = {
   mimeType?: string;
 };
 
+const ALLOWED_WEARABLE_HINT =
+  "上衣、下装、裤子、裙装、连衣裙、外套、鞋、包、帽子、围巾、首饰、腰带等穿戴类物品";
+
+const REJECTED_SUBJECT_HINT =
+  "食物、家具、宠物、风景、截图、人物自拍、家电、日用品等非穿戴类主体";
+
 function buildSystemPrompt(): string {
   return `你是 OutfitAI 的中文衣物识别助手。
-请根据图片识别衣服属性，只输出严格 JSON，不要 markdown，不要解释。
+请先判断图片主体是否属于可加入衣橱的穿戴类物品，再输出严格 JSON，不要 markdown，不要解释。
+
+允许加入衣橱：${ALLOWED_WEARABLE_HINT}
+不能加入衣橱：${REJECTED_SUBJECT_HINT}
+
+如果图片主体不是衣物/鞋包/配饰：
+- 必须返回 "is_clothing": false
+- 不要强行把非衣物归类为上衣/下装（例如玉米、水果、猫、沙发都不能归类为上衣）
+- "rejection_reason" 用中文说明原因（例如："图片主体是玉米，属于食物，不是穿戴类物品"）
+- 其他字段可留空字符串或空数组，"confidence" 填写你对判断的置信度（0-1）
+
+如果是穿戴类物品：
+- 返回 "is_clothing": true
+- 正常识别 name、category、color 等字段
+- 不要填写 rejection_reason
 
 JSON 格式：
 {
+  "is_clothing": boolean,
+  "rejection_reason": string,
   "name": string,
   "category": string,
   "color": string,
@@ -83,7 +105,36 @@ function normalizeCategory(value: unknown): string {
   return DEFAULT_CATEGORIES[0];
 }
 
-function normalizeAnalysis(raw: Partial<ClothingAnalysis>): ClothingAnalysis {
+function normalizeConfidence(value: unknown): number {
+  return typeof value === "number" && value >= 0 && value <= 1
+    ? value
+    : 0.5;
+}
+
+export function normalizeClothingAnalysis(
+  raw: Partial<ClothingAnalysis>
+): ClothingAnalysis {
+  const isClothing = raw.is_clothing === true;
+
+  if (!isClothing) {
+    return {
+      name: "",
+      category: "",
+      color: "",
+      material: "",
+      style_tags: [],
+      season_tags: [],
+      occasion_tags: [],
+      notes: "",
+      confidence: normalizeConfidence(raw.confidence),
+      is_clothing: false,
+      rejection_reason:
+        typeof raw.rejection_reason === "string" && raw.rejection_reason.trim()
+          ? raw.rejection_reason.trim()
+          : "图片主体不是可加入衣橱的穿戴类物品",
+    };
+  }
+
   return {
     name:
       typeof raw.name === "string" && raw.name.trim()
@@ -96,12 +147,8 @@ function normalizeAnalysis(raw: Partial<ClothingAnalysis>): ClothingAnalysis {
     season_tags: pickFromAllowed(raw.season_tags, DEFAULT_SEASON_TAGS),
     occasion_tags: pickFromAllowed(raw.occasion_tags, DEFAULT_OCCASION_TAGS),
     notes: typeof raw.notes === "string" ? raw.notes.trim() : "",
-    confidence:
-      typeof raw.confidence === "number" &&
-      raw.confidence >= 0 &&
-      raw.confidence <= 1
-        ? raw.confidence
-        : 0.5,
+    confidence: normalizeConfidence(raw.confidence),
+    is_clothing: true,
   };
 }
 
@@ -145,7 +192,10 @@ async function requestVisionAnalysis(
         {
           role: "user",
           content: [
-            { type: "text", text: "请识别这件衣服，只输出严格 JSON。" },
+            {
+              type: "text",
+              text: "请先判断图片主体是否为可加入衣橱的穿戴类物品，再识别属性，只输出严格 JSON。",
+            },
             {
               type: "image_url",
               image_url: { url: imageUrl },
@@ -190,5 +240,5 @@ export async function analyzeClothing(
 ): Promise<ClothingAnalysis> {
   const content = await requestVisionAnalysis(input);
   const parsed = parseJsonContent<Partial<ClothingAnalysis>>(content);
-  return normalizeAnalysis(parsed);
+  return normalizeClothingAnalysis(parsed);
 }

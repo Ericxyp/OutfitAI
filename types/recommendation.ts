@@ -1,4 +1,5 @@
-import type { ClosetItem } from "@/types/database";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import type { ClosetItem, Database } from "@/types/database";
 import type { GenerateRecommendationOptions } from "@/types/weather";
 
 export type RecommendationResult = {
@@ -58,12 +59,16 @@ export type RetrievalResult = {
   debugScores: RetrievalDebugScore[];
   categoryCoverage: Record<string, number>;
   usedFallback: boolean;
+  usedEmbeddingRetrieval?: boolean;
+  embeddingCandidateCount?: number;
 };
 
 export type OutfitWorkflowInput = {
   userId: string;
   requestText: string;
   options?: GenerateRecommendationOptions;
+  /** Bearer-authenticated client for mobile API routes */
+  supabase?: SupabaseClient<Database>;
 };
 
 export type OutfitWorkflowSuccess = {

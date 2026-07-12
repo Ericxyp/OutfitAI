@@ -8,7 +8,13 @@
     "start": "next start",
     "lint": "next lint",
     "test:qwen": "npx tsx scripts/test-qwen.ts",
-    "eval:recommendations": "npx tsx scripts/eval-recommendations.ts"
+    "eval:recommendations": "npx tsx scripts/eval-recommendations.ts",
+    "test:style-knowledge": "npx tsx scripts/test-style-knowledge.ts",
+    "test:feedback-reason-tags": "npx tsx scripts/test-feedback-reason-tags.ts",
+    "test:clothing-gate": "npx tsx scripts/test-clothing-gate.ts",
+    "test:commerce-recommendations": "npx tsx scripts/test-commerce-recommendations.ts",
+    "backfill:closet-embeddings": "npx tsx scripts/backfill-closet-embeddings.ts",
+    "backfill:style-knowledge-embeddings": "npx tsx scripts/backfill-style-knowledge-embeddings.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.0",
