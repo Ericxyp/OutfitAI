@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { trackEvent } from "@/lib/analytics/track-event";
+import { logger } from "@/lib/logger";
 import { createClient } from "@/lib/supabase/server";
 
 type CommerceClickBody = {
@@ -81,7 +82,12 @@ export async function POST(request: Request) {
   });
 
   if (clickError) {
-    console.error("[commerce click] insert failed:", clickError);
+    logger.error("[commerce click] insert failed", {
+      feature: "commerce",
+      reason: "click_insert_failed",
+      errorName: clickError.name ?? "PostgrestError",
+      errorMessage: clickError.message.slice(0, 200),
+    });
     return NextResponse.json(
       { success: false, error: "记录点击失败" },
       { status: 500 }

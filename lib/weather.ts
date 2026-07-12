@@ -1,4 +1,5 @@
 import type { WeatherContext } from "@/types/weather";
+import { logger, safeErrorFields } from "@/lib/logger";
 
 const DEFAULT_TIMEOUT_MS = 6000;
 const DEFAULT_BASE_URL = "https://api.weatherapi.com/v1";
@@ -81,7 +82,7 @@ export async function getWeatherByCoordinates(input: {
 }): Promise<WeatherContext | null> {
   const apiKey = getWeatherApiKey();
   if (!apiKey) {
-    console.warn("[weather] missing api key, skipping weather lookup");
+    logger.warn("[weather] missing api key, skipping weather lookup");
     return null;
   }
 
@@ -93,15 +94,14 @@ export async function getWeatherByCoordinates(input: {
     input.longitude < -180 ||
     input.longitude > 180
   ) {
-    console.warn("[weather] invalid coordinates, skipping weather lookup");
+    logger.warn("[weather] invalid coordinates, skipping weather lookup");
     return null;
   }
 
   const baseUrl = getWeatherBaseUrl().replace(/\/$/, "");
   const url = `${baseUrl}/current.json?key=${encodeURIComponent(apiKey)}&q=${input.latitude},${input.longitude}`;
 
-  console.log("[weather] fetching current weather", {
-    baseUrl,
+  logger.debug("[weather] fetching current weather", {
     hasApiKey: true,
   });
 
@@ -116,9 +116,11 @@ export async function getWeatherByCoordinates(input: {
     });
 
     if (!response.ok) {
-      console.error("[weather] fetch failed", {
-        status: response.status,
-        statusText: response.statusText,
+      logger.error("[weather] fetch failed", {
+        feature: "weather",
+        reason: "http_error",
+        errorName: "HttpError",
+        errorMessage: `${response.status} ${response.statusText}`.slice(0, 200),
       });
       return null;
     }
@@ -127,12 +129,16 @@ export async function getWeatherByCoordinates(input: {
     const weather = normalizeWeatherApiResponse(data, "weatherapi.com");
 
     if (!weather) {
-      console.error("[weather] invalid response, failed to normalize");
+      logger.error("[weather] invalid response, failed to normalize", {
+      feature: "weather",
+      reason: "invalid_response",
+      errorName: "NormalizeError",
+      errorMessage: "failed to normalize current weather",
+    });
       return null;
     }
 
-    console.log("[weather] success", {
-      locationName: weather.locationName,
+    logger.debug("[weather] success", {
       temperatureC: weather.temperatureC,
       condition: weather.condition,
     });
@@ -143,9 +149,10 @@ export async function getWeatherByCoordinates(input: {
       error instanceof Error &&
       (error.name === "AbortError" || error.message.includes("aborted"));
 
-    console.error("[weather] fetch failed", {
+    logger.error("[weather] fetch failed", {
+      feature: "weather",
       reason: isTimeout ? "timeout" : "error",
-      message: error instanceof Error ? error.message : String(error),
+      ...safeErrorFields(error),
     });
     return null;
   } finally {
@@ -197,7 +204,7 @@ export async function getForecastByDestination(input: {
 }): Promise<WeatherContext[] | null> {
   const apiKey = getWeatherApiKey();
   if (!apiKey) {
-    console.warn("[weather] missing api key, skipping forecast");
+    logger.warn("[weather] missing api key, skipping forecast");
     return null;
   }
 
@@ -211,8 +218,7 @@ export async function getForecastByDestination(input: {
   const baseUrl = getWeatherBaseUrl().replace(/\/$/, "");
   const url = `${baseUrl}/forecast.json?key=${encodeURIComponent(apiKey)}&q=${encodeURIComponent(destination)}&days=${days}&aqi=no&alerts=no`;
 
-  console.log("[weather] fetching forecast", {
-    baseUrl,
+  logger.debug("[weather] fetching forecast", {
     days,
     hasApiKey: true,
   });
@@ -228,16 +234,23 @@ export async function getForecastByDestination(input: {
     });
 
     if (!response.ok) {
-      console.error("[weather] forecast fetch failed", {
-        status: response.status,
-        statusText: response.statusText,
+      logger.error("[weather] forecast fetch failed", {
+        feature: "weather",
+        reason: "http_error",
+        errorName: "HttpError",
+        errorMessage: `${response.status} ${response.statusText}`.slice(0, 200),
       });
       return null;
     }
 
     const data: unknown = await response.json();
     if (!isRecord(data) || !isRecord(data.forecast)) {
-      console.error("[weather] invalid forecast response");
+      logger.error("[weather] invalid forecast response", {
+      feature: "weather",
+      reason: "invalid_response",
+      errorName: "NormalizeError",
+      errorMessage: "invalid forecast payload",
+    });
       return null;
     }
 
@@ -255,12 +268,16 @@ export async function getForecastByDestination(input: {
       .filter((day): day is WeatherContext => day !== null);
 
     if (result.length === 0) {
-      console.error("[weather] forecast normalize produced no days");
+      logger.error("[weather] forecast normalize produced no days", {
+      feature: "weather",
+      reason: "empty_forecast",
+      errorName: "NormalizeError",
+      errorMessage: "no forecast days after normalize",
+    });
       return null;
     }
 
-    console.log("[weather] forecast success", {
-      locationName,
+    logger.debug("[weather] forecast success", {
       dayCount: result.length,
     });
 
@@ -270,9 +287,10 @@ export async function getForecastByDestination(input: {
       error instanceof Error &&
       (error.name === "AbortError" || error.message.includes("aborted"));
 
-    console.error("[weather] forecast fetch failed", {
+    logger.error("[weather] forecast fetch failed", {
+      feature: "weather",
       reason: isTimeout ? "timeout" : "error",
-      message: error instanceof Error ? error.message : String(error),
+      ...safeErrorFields(error),
     });
     return null;
   } finally {

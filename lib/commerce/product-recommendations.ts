@@ -1,6 +1,7 @@
 import type { ProductAnalysis } from "@/lib/ai/analyze-product";
 import type { StyleProfileContext } from "@/lib/memory/style-profile";
 import type { PersonalProfileContext } from "@/lib/memory/personal-profile-shared";
+import { logger } from "@/lib/logger";
 import type { ProductRecommendationCard } from "@/types/commerce";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database, ProductRecommendationRow } from "@/types/database";
@@ -39,6 +40,12 @@ function intersectTags(left: string[], right: string[]): string[] {
     .filter((tag) => tag && rightSet.has(tag));
 }
 
+function resolveProductUrl(product: ProductRecommendationRow): string {
+  const affiliate = product.affiliate_url?.trim();
+  if (affiliate) return affiliate;
+  return product.product_url;
+}
+
 function scoreProduct(
   product: ProductRecommendationRow,
   input: ProductRecommendationInput
@@ -63,7 +70,7 @@ function scoreProduct(
   );
   if (styleOverlap.length > 0) {
     score += Math.min(styleOverlap.length * 10, 30);
-    reasons.push(`风格契合：${styleOverlap.join("、")}`);
+    reasons.push(`风格契合：${styleOverlap.slice(0, 2).join("、")}`);
   }
 
   const occasionOverlap = intersectTags(
@@ -72,7 +79,7 @@ function scoreProduct(
   );
   if (occasionOverlap.length > 0) {
     score += Math.min(occasionOverlap.length * 5, 15);
-    reasons.push(`场景契合：${occasionOverlap.join("、")}`);
+    reasons.push(`场景契合：${occasionOverlap.slice(0, 2).join("、")}`);
   }
 
   if (styleProfile) {
@@ -92,24 +99,22 @@ function scoreProduct(
       reasons.push("符合你的偏好颜色");
     }
 
-    const avoidColorHit = styleProfile.avoidColors.some((color) =>
-      textMatches(product.color, color)
-    );
-    if (avoidColorHit) {
-      score -= 30;
-      reasons.push("颜色在你常避开范围内");
-    }
-
     const avoidStyleHit = styleProfile.avoidStyles.some((style) =>
       (product.style_tags ?? []).some((tag) => textMatches(tag, style))
     );
     if (avoidStyleHit) {
       score -= 25;
-      reasons.push("风格与你常避开类型重叠");
+    }
+
+    const avoidColorHit = styleProfile.avoidColors.some((color) =>
+      textMatches(product.color, color)
+    );
+    if (avoidColorHit) {
+      score -= 30;
     }
   }
 
-  return { score, reasons };
+  return { score, reasons: reasons.slice(0, 2) };
 }
 
 function mapRowToRecommendation(
@@ -134,7 +139,7 @@ function mapRowToRecommendation(
         ? null
         : Number(product.price_max),
     imageUrl: product.image_url,
-    productUrl: product.product_url,
+    productUrl: resolveProductUrl(product),
     merchant: product.merchant,
     score,
     matchReasons,
@@ -154,7 +159,9 @@ export async function getProductRecommendationsForShoppingCheck(
       .order("created_at", { ascending: false });
 
     if (error) {
-      console.warn("[productRecommendations] query failed:", error.message);
+      logger.warn("[productRecommendations] query failed", {
+        errorMessage: error.message.slice(0, 200),
+      });
       return [];
     }
 
@@ -171,7 +178,12 @@ export async function getProductRecommendationsForShoppingCheck(
       .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
       .slice(0, limit);
   } catch (error) {
-    console.warn("[productRecommendations] failed:", error);
+    logger.warn("[productRecommendations] failed", {
+      errorMessage:
+        error instanceof Error
+          ? error.message.slice(0, 200)
+          : String(error).slice(0, 200),
+    });
     return [];
   }
 }

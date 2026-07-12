@@ -17,8 +17,10 @@ insert into public.product_recommendations (
   price_max,
   image_url,
   product_url,
+  affiliate_url,
   merchant,
   commission_type,
+  source,
   is_active
 )
 values
@@ -32,10 +34,12 @@ values
     array['日常', '周末'],
     79,
     129,
-    null,
+    'https://placehold.co/400x533/e8e4df/111111/png?text=Tee',
     'https://example.com/product/white-tee',
+    null,
     'MUJI 官方',
     'demo',
+    'manual',
     true
   ),
   (
@@ -50,8 +54,10 @@ values
     299,
     'https://placehold.co/400x533/e8e4df/111111/png?text=Pants',
     'https://example.com/product/off-white-pants',
+    null,
     'Uniqlo 官方',
     'demo',
+    'manual',
     true
   ),
   (
@@ -66,8 +72,10 @@ values
     599,
     'https://placehold.co/400x533/e8e4df/111111/png?text=Loafers',
     'https://example.com/product/black-loafers',
+    null,
     'Clarks 官方',
     'demo',
+    'manual',
     true
   ),
   (
@@ -82,8 +90,10 @@ values
     249,
     'https://placehold.co/400x533/e8e4df/111111/png?text=Jacket',
     'https://example.com/product/light-jacket',
+    null,
     'Decathlon 官方',
     'demo',
+    'manual',
     true
   ),
   (
@@ -96,10 +106,66 @@ values
     array['日常', '旅行'],
     89,
     159,
-    null,
+    'https://placehold.co/400x533/e8e4df/111111/png?text=Bag',
     'https://example.com/product/canvas-tote',
+    null,
     'Baggu 官方',
     'demo',
+    'manual',
+    true
+  ),
+  (
+    'c3000003-0003-4000-8000-000000000006',
+    '米色针织开衫',
+    'Uniqlo',
+    '外套',
+    '米色',
+    array['温柔', '简约', '通勤'],
+    array['上班', '约会'],
+    199,
+    299,
+    'https://placehold.co/400x533/e8e4df/111111/png?text=Cardigan',
+    'https://example.com/product/beige-cardigan',
+    'https://example.com/aff/beige-cardigan',
+    'Uniqlo 官方',
+    'demo',
+    'manual',
+    true
+  ),
+  (
+    'c3000003-0003-4000-8000-000000000007',
+    '深蓝直筒牛仔裤',
+    'Levi''s',
+    '裤子',
+    '深蓝',
+    array['休闲', '韩系'],
+    array['周末', '日常'],
+    299,
+    499,
+    'https://placehold.co/400x533/e8e4df/111111/png?text=Jeans',
+    'https://example.com/product/indigo-jeans',
+    null,
+    'Levi''s 官方',
+    'demo',
+    'manual',
+    true
+  ),
+  (
+    'c3000003-0003-4000-8000-000000000008',
+    '白色小白鞋',
+    'Nike',
+    '鞋子',
+    '白色',
+    array['休闲', '简约'],
+    array['日常', '周末'],
+    499,
+    699,
+    'https://placehold.co/400x533/e8e4df/111111/png?text=Sneakers',
+    'https://example.com/product/white-sneakers',
+    null,
+    'Nike 官方',
+    'demo',
+    'manual',
     true
   )
 on conflict (id) do update set
@@ -113,6 +179,8 @@ on conflict (id) do update set
   price_max = excluded.price_max,
   image_url = excluded.image_url,
   product_url = excluded.product_url,
+  affiliate_url = excluded.affiliate_url,
   merchant = excluded.merchant,
   commission_type = excluded.commission_type,
+  source = excluded.source,
   is_active = excluded.is_active;

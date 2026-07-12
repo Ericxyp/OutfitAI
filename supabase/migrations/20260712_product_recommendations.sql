@@ -2,10 +2,8 @@
 -- Migration 20260712: product_recommendations + commerce_clicks
 -- 购物推荐闭环：商品库与购买点击记录
 -- 可在 Supabase Dashboard → SQL Editor 中单独执行
--- 说明：完整建表也可直接执行 supabase/schema.sql（含本节同等定义）
 -- ============================================================
 
--- 1. product_recommendations（商品推荐表）
 create table if not exists public.product_recommendations (
   id uuid primary key default gen_random_uuid(),
   title text not null,
@@ -18,11 +16,27 @@ create table if not exists public.product_recommendations (
   price_max numeric,
   image_url text,
   product_url text not null,
+  affiliate_url text,
   merchant text,
-  commission_type text,
+  commission_type text default 'demo',
+  source text default 'manual',
+  recommendation_reason text,
   is_active boolean not null default true,
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
 );
+
+alter table public.product_recommendations
+  add column if not exists affiliate_url text;
+
+alter table public.product_recommendations
+  add column if not exists source text default 'manual';
+
+alter table public.product_recommendations
+  add column if not exists recommendation_reason text;
+
+alter table public.product_recommendations
+  add column if not exists updated_at timestamptz not null default now();
 
 create index if not exists product_recommendations_active_idx
   on public.product_recommendations (is_active)
@@ -37,14 +51,26 @@ create index if not exists product_recommendations_style_tags_idx
 alter table public.product_recommendations enable row level security;
 
 drop policy if exists "product_recommendations_select_active" on public.product_recommendations;
+drop policy if exists "product_recommendations_select_authenticated" on public.product_recommendations;
+drop policy if exists "product_recommendations_insert_authenticated" on public.product_recommendations;
+drop policy if exists "product_recommendations_update_authenticated" on public.product_recommendations;
 
-create policy "product_recommendations_select_active"
+create policy "product_recommendations_select_authenticated"
   on public.product_recommendations for select
   to authenticated
-  using (is_active = true);
+  using (true);
 
--- 2. commerce_clicks（购买点击转化追踪）
--- 字段与 app/api/commerce/click/route.ts 写入结构一致
+create policy "product_recommendations_insert_authenticated"
+  on public.product_recommendations for insert
+  to authenticated
+  with check (true);
+
+create policy "product_recommendations_update_authenticated"
+  on public.product_recommendations for update
+  to authenticated
+  using (true)
+  with check (true);
+
 create table if not exists public.commerce_clicks (
   id uuid primary key default gen_random_uuid(),
   user_id uuid references auth.users (id) on delete set null,

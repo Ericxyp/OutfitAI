@@ -12,6 +12,7 @@ import { getUserPersonalProfile } from "@/lib/memory/personal-profile";
 import { getUserStyleProfile } from "@/lib/memory/style-profile";
 import { getForecastByDestination } from "@/lib/weather";
 import { createClient } from "@/lib/supabase/server";
+import { logger } from "@/lib/logger";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ClosetItem, Database } from "@/types/database";
 import type { WeatherContext } from "@/types/weather";
@@ -183,7 +184,7 @@ export async function runTravelWorkflow(
     limit: 6,
   });
 
-  console.log("[travelWorkflow] calling generateTravelPlan", {
+  logger.info("[travelWorkflow] calling generateTravelPlan", {
     destination,
     days,
     hasWeather: weatherContext !== null,
@@ -268,7 +269,12 @@ export async function runTravelWorkflow(
       .single();
 
     if (planError || !savedPlan) {
-      console.error("[travelWorkflow] save plan failed", planError);
+      logger.error("[travelWorkflow] save plan failed", {
+        feature: "travel",
+        reason: "save_failed",
+        errorName: planError?.name ?? "PostgrestError",
+        errorMessage: planError?.message?.slice(0, 200) ?? "missing row",
+      });
       await trackTravelPlanFailed(input.userId, "save_failed", {
         days,
         hasWeather: weatherContext !== null,
@@ -296,7 +302,12 @@ export async function runTravelWorkflow(
       .insert(dayRows);
 
     if (daysError) {
-      console.error("[travelWorkflow] save days failed", daysError);
+      logger.error("[travelWorkflow] save days failed", {
+        feature: "travel",
+        reason: "save_failed",
+        errorName: daysError.name ?? "PostgrestError",
+        errorMessage: daysError.message.slice(0, 200),
+      });
       await supabase.from("travel_plans").delete().eq("id", savedPlan.id);
       await trackTravelPlanFailed(input.userId, "save_failed", {
         days,
@@ -325,7 +336,7 @@ export async function runTravelWorkflow(
       },
     });
 
-    console.log("[travelWorkflow] success", { planId: savedPlan.id });
+    logger.info("[travelWorkflow] success", { planId: savedPlan.id });
 
     return {
       success: true,
@@ -347,10 +358,11 @@ export async function runTravelWorkflow(
       error instanceof Error ? error.message : String(error);
     const failureReason = mapTravelFailureReason(error);
 
-    console.error("[travelWorkflow] generateTravelPlan failed", {
-      failureReason,
+    logger.error("[travelWorkflow] generateTravelPlan failed", {
+      feature: "travel",
+      reason: failureReason,
       errorName,
-      errorMessage,
+      errorMessage: errorMessage.slice(0, 200),
     });
 
     await trackTravelPlanFailed(input.userId, failureReason, {

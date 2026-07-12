@@ -21,10 +21,14 @@ const catalog: ProductRecommendationRow[] = [
     price_max: 299,
     image_url: null,
     product_url: "https://example.com/products/beige-cardigan",
+    affiliate_url: "https://example.com/aff/beige-cardigan",
     merchant: "Uniqlo 官方",
     commission_type: "demo",
+    source: "manual",
+    recommendation_reason: null,
     is_active: true,
     created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
   },
   {
     id: "c3000003-0003-4000-8000-000000000002",
@@ -38,10 +42,14 @@ const catalog: ProductRecommendationRow[] = [
     price_max: 129,
     image_url: null,
     product_url: "https://example.com/products/white-tee",
+    affiliate_url: null,
     merchant: "MUJI 官方",
     commission_type: "demo",
+    source: "manual",
+    recommendation_reason: null,
     is_active: true,
     created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
   },
 ];
 
@@ -91,6 +99,10 @@ async function testRecommendationsForCardiganLikeProduct() {
     "top result should match cardigan"
   );
   assert(recommendations[0].score !== undefined, "should include score");
+  assert(
+    recommendations[0].productUrl.includes("/aff/"),
+    "should prefer affiliate_url when present"
+  );
 
   console.log("[PASS] product recommendations for cardigan-like product");
 }
@@ -137,6 +149,7 @@ function printManualTestGuide() {
   console.log("3. 结果下方应出现「可以看看这些单品」");
   console.log("4. 点击「去购买」应打开商品链接，并写入 commerce_clicks");
   console.log("5. /profile/metrics 查看购物转化指标");
+  console.log("6. /profile/products 可新增/停用商品（Demo 管理页）");
 }
 
 async function main() {

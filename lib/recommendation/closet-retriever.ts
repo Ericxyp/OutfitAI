@@ -1,4 +1,5 @@
 import { generateEmbeddingSafe } from "@/lib/ai/embeddings";
+import { logger } from "@/lib/logger";
 import type { StyleProfileContext } from "@/lib/memory/style-profile";
 import type { ClosetItem } from "@/types/database";
 import type { Database } from "@/types/database";
@@ -77,7 +78,7 @@ export function retrieveClosetCandidates(
 ): RetrievalResult {
   const { closetItems, requestText, weatherContext, styleProfile } = input;
 
-  console.log("[recommendation] retrieval start", {
+  logger.debug("[recommendation] retrieval start", {
     closetCount: closetItems.length,
     hasWeather: weatherContext !== null,
     hasStyleProfile: styleProfile !== null && styleProfile.feedbackCount > 0,
@@ -96,7 +97,7 @@ export function retrieveClosetCandidates(
     eligibleItems.map((item) => scoreClosetItem(item, scoreContext))
   );
 
-  console.log("[recommendation] scoring finished", {
+  logger.debug("[recommendation] scoring finished", {
     scoredCount: scoredItems.length,
     topScore: scoredItems[0]?.ruleScore ?? 0,
   });
@@ -112,12 +113,14 @@ export function retrieveClosetCandidates(
   const candidateItems = picked.map((scored) => scored.item);
   const categoryCoverage = getCategoryCoverage(picked);
 
-  console.log("[recommendation] selected candidates", {
+  logger.debug("[recommendation] selected candidates", {
     candidateCount: candidateItems.length,
     usedFullCloset: useFullCloset,
   });
 
-  console.log("[recommendation] category coverage", categoryCoverage);
+  logger.debug("[recommendation] category coverage", {
+    ...categoryCoverage,
+  });
 
   const debugScores = picked.map((scored) => ({
     itemId: scored.item.id.slice(0, 8),
@@ -165,7 +168,7 @@ export async function retrieveClosetEmbeddingCandidates(input: {
     });
 
     if (error) {
-      console.warn("[recommendation] embedding rpc failed:", error.message);
+      logger.warn("[recommendation] embedding rpc failed", { errorMessage: error.message.slice(0, 200) });
       return [];
     }
 
@@ -193,7 +196,7 @@ export async function retrieveClosetEmbeddingCandidates(input: {
       );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    console.warn("[recommendation] embedding retrieval failed:", message);
+    logger.warn("[recommendation] embedding retrieval failed", { errorMessage: message.slice(0, 200) });
     return [];
   }
 }
@@ -327,7 +330,7 @@ export async function retrieveClosetCandidatesHybridSafe(input: {
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    console.warn("[recommendation] hybrid retrieval failed, using rules:", message);
+    logger.warn("[recommendation] hybrid retrieval failed, using rules", { errorMessage: message.slice(0, 200) });
     return ruleRetrieval;
   }
 }
@@ -356,9 +359,11 @@ export function retrieveClosetCandidatesSafe(
     const errorMessage =
       error instanceof Error ? error.message : String(error);
 
-    console.error("[recommendation] retrieval failed, using fallback", {
+    logger.error("[recommendation] retrieval failed, using fallback", {
+      feature: "recommendation",
+      reason: "retrieval_failed",
       errorName,
-      errorMessage,
+      errorMessage: errorMessage.slice(0, 200),
     });
 
     return {

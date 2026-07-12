@@ -1,4 +1,5 @@
 import { generateEmbeddingSafe } from "@/lib/ai/embeddings";
+import { logger } from "@/lib/logger";
 import {
   isPersonalProfileContext,
   isStyleProfileContext,
@@ -261,7 +262,7 @@ async function retrieveStyleKnowledgeEmbeddingScores(
     );
 
     if (error) {
-      console.warn("[styleKnowledge] embedding rpc failed:", error.message);
+      logger.warn("[styleKnowledge] embedding rpc failed", { errorMessage: error.message.slice(0, 200) });
       return new Map();
     }
 
@@ -273,7 +274,7 @@ async function retrieveStyleKnowledgeEmbeddingScores(
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    console.warn("[styleKnowledge] embedding retrieval failed:", message);
+    logger.warn("[styleKnowledge] embedding retrieval failed", { errorMessage: message.slice(0, 200) });
     return new Map();
   }
 }
@@ -327,7 +328,7 @@ export async function retrieveStyleKnowledge(
       .eq("is_active", true);
 
     if (error) {
-      console.warn("[styleKnowledge] retrieve failed:", error.message);
+      logger.warn("[styleKnowledge] retrieve failed", { errorMessage: error.message.slice(0, 200) });
       return [];
     }
 
@@ -351,7 +352,7 @@ export async function retrieveStyleKnowledge(
       limit
     );
 
-    console.log("[styleKnowledge] hybrid retrieval", {
+    logger.debug("[styleKnowledge] hybrid retrieval", {
       usedEmbedding: true,
       resultCount: merged.length,
     });
@@ -359,7 +360,7 @@ export async function retrieveStyleKnowledge(
     return merged;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    console.warn("[styleKnowledge] retrieve failed:", message);
+    logger.warn("[styleKnowledge] retrieve failed", { errorMessage: message.slice(0, 200) });
     return [];
   }
 }

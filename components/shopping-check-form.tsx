@@ -81,11 +81,13 @@ function RecommendedProductCard({
   shoppingCheckId: string;
 }) {
   const [isClicking, setIsClicking] = useState(false);
+  const [clickError, setClickError] = useState<string | null>(null);
 
   const handlePurchaseClick = async () => {
     if (isClicking) return;
 
     setIsClicking(true);
+    setClickError(null);
     try {
       const response = await fetch("/api/commerce/click", {
         method: "POST",
@@ -112,8 +114,9 @@ function RecommendedProductCard({
 
       window.open(data.redirectUrl, "_blank", "noopener,noreferrer");
     } catch (error) {
-      console.error("[commerce] purchase click failed:", error);
-      alert(error instanceof Error ? error.message : "跳转失败，请稍后重试");
+      setClickError(
+        error instanceof Error ? error.message : "跳转失败，请稍后重试"
+      );
     } finally {
       setIsClicking(false);
     }
@@ -169,6 +172,10 @@ function RecommendedProductCard({
       >
         {isClicking ? "跳转中..." : "去购买"}
       </button>
+
+      {clickError && (
+        <p className="mt-2 text-xs text-red-600">{clickError}</p>
+      )}
     </div>
   );
 }

@@ -39,7 +39,8 @@ OutfitAI 把「衣橱数据 + 场景理解 + 规则召回 + 轻量 RAG 知识 + 
 | 旅行穿搭规划 | `/travel` | 目的地、日期、天数、目的、风格偏好、少带衣服；生成 Day1-DayN 穿搭 + 打包清单 |
 | 购物助手 | `/shopping` | 上传商品图分析兼容度、可搭配套数、购买建议与风险（**不支持**电商链接解析） |
 | 历史记录 | `/history` | 普通推荐、旅行规划、购物分析历史列表 |
-| 产品数据 | `/profile/metrics` | 基于 `event_logs` 的基础指标：接受率、功能使用、最近事件等 |
+| 产品数据 | `/profile/metrics` | 基于 `event_logs` 的基础指标：接受率、功能使用、购物点击转化等 |
+| 商品管理 | `/profile/products` | **Demo 管理页**：维护 `product_recommendations`（新增/编辑/启用停用） |
 | 收藏 | `/saved` | 查看已收藏的穿搭推荐 |
 
 ---
@@ -289,7 +290,8 @@ npm run eval:recommendations
 |------|------|
 | `EVAL_LIMIT=3` | 只跑前 N 个 case |
 | `EVAL_CASE=rainy-commute` | 只跑单个 case |
-| 无 `QWEN_API_KEY` | 跳过 AI 评测，exit 0 |
+| 无 `QWEN_API_KEY` | **跳过** AI 评测并 `exit 0`（便于本地/CI 无 Key 时不阻断） |
+| 有 `QWEN_API_KEY` | 调用 Qwen 跑完整 case；失败 case 以非 0 退出 |
 
 > 评测**不写入数据库**，直接调用 `generateOutfit` + `retrieveClosetCandidatesSafe`。
 
@@ -341,9 +343,9 @@ npm run eval:recommendations
 
 **注意：** 这不是训练好的推荐模型，而是第一版语义增强；无 embedding 时完全回退规则召回。
 
-### 未采用
+### 未采用（架构取舍）
 
-FastAPI 独立后端、LangGraph Agent Orchestrator、React Native 移动端。
+FastAPI 独立后端、LangGraph Agent Orchestrator。移动端采用 **Expo React Native MVP**（`apps/mobile`），与 Web 共用 Supabase 与 Next.js API Gateway，而非独立原生工程。
 
 ---
 
@@ -362,10 +364,13 @@ FastAPI 独立后端、LangGraph Agent Orchestrator、React Native 移动端。
 | `travel_plans` | 旅行计划 |
 | `travel_plan_days` | 每日旅行穿搭 |
 | `shopping_checks` | 购物分析记录 |
+| `product_recommendations` | 购物推荐商品库 |
+| `commerce_clicks` | 商品「去购买」点击转化 |
 | `event_logs` | 产品事件日志（Analytics） |
 | `style_knowledge_entries` | 穿搭知识库（RAG） |
 
-所有用户数据表均启用 **Row Level Security**，用户只能访问自己的数据。
+所有用户数据表均启用 **Row Level Security**，用户只能访问自己的数据。  
+`product_recommendations` 为 Demo 商品库：登录用户可读/写（含商品管理页 `/profile/products`）；购物召回仅使用 `is_active = true` 商品。
 
 ---
 
@@ -377,18 +382,20 @@ FastAPI 独立后端、LangGraph Agent Orchestrator、React Native 移动端。
 cp .env.local.example .env.local
 ```
 
+> **安全提醒：** `.env.local.example` 仅含占位符，不要填入真实 Key 后再提交。若 Key 曾出现在示例文件或 Git 历史中，请到 Supabase / DashScope / WeatherAPI 等平台**立即重置**。
+
 | 变量 | 说明 |
 |------|------|
 | `NEXT_PUBLIC_SUPABASE_URL` | Supabase 项目 URL |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase 匿名公钥 |
-| `SUPABASE_SERVICE_ROLE_KEY` | 服务端密钥（可选） |
+| `SUPABASE_SERVICE_ROLE_KEY` | 服务端密钥（可选，仅脚本/服务端） |
 | `NEXT_PUBLIC_SITE_URL` | 本地 `http://localhost:3000` |
-| `QWEN_API_KEY` | DashScope API Key |
+| `QWEN_API_KEY` | DashScope API Key（占位，勿提交真实值） |
 | `QWEN_BASE_URL` | 默认 `https://dashscope.aliyuncs.com/compatible-mode/v1` |
 | `QWEN_MODEL` | 默认 `qwen3-vl-plus` |
 | `EMBEDDING_MODEL` | 默认 `text-embedding-v4` |
 | `EMBEDDING_DIMENSIONS` | 默认 `1024`（需与 schema vector 维度一致） |
-| `WEATHER_API_KEY` | 天气 API Key（可选） |
+| `WEATHER_API_KEY` | 天气 API Key（可选，示例值为 `your_weather_api_key`） |
 | `WEATHER_API_BASE_URL` | 默认 WeatherAPI.com |
 
 ### Supabase 配置
@@ -431,7 +438,7 @@ npm run test:qwen
 # 验证 RAG 知识检索
 npm run test:style-knowledge
 
-# 离线推荐评测（需 QWEN_API_KEY）
+# 离线推荐评测（无 QWEN_API_KEY 时跳过 AI 评测并以 exit 0 结束；有 Key 时跑完整用例）
 npm run eval:recommendations
 
 # 回填 embedding（需 QWEN_API_KEY + SUPABASE_SERVICE_ROLE_KEY）
@@ -445,7 +452,13 @@ npm run backfill:closet-embeddings
 
 ### Demo 种子数据（可选）
 
-示例数据已拆分：`seed-products.sql` 只导入购物推荐商品（无需 user_id）；`seed-demo-user.sql` 导入 demo 衣橱/推荐（需先替换 user_id）。`seed.sql` 仅为说明入口，不会插入数据。
+示例数据已拆分（`seed.sql` 仅为说明入口，**不会插入数据**）：
+
+| 脚本 | 用途 |
+|------|------|
+| `seed-products.sql` | 只导入购物推荐商品（无需 user_id，可直接跑） |
+| `seed-demo-user.sql` | 导入 demo 衣橱/推荐/反馈（需先替换 `v_user_id_text`） |
+| `cleanup-demo-closet.sql` | 默认只 SELECT；DELETE 需自行取消注释，按邮箱清理占位衣 |
 
 ---
 
@@ -471,29 +484,52 @@ npm run backfill:closet-embeddings
 
 ---
 
-## 15. 当前限制与后续规划
+## 15. 当前状态与后续规划
 
-### 未实现
+### 当前产品形态
+
+| 项 | 说明 |
+|----|------|
+| Web 主应用 | Next.js（App Router）+ Server Actions |
+| 移动端 | Expo React Native MVP（`apps/mobile`） |
+| 后端数据 | Supabase Auth / DB / Storage（含 RLS） |
+| LLM | Qwen Vision + LLM（DashScope，服务端调用） |
+| 编排 | 轻量 Workflow，**不是** LangGraph |
+| 独立后端 | **没有** FastAPI 独立后端 |
+
+### 已完成（Demo 可演示）
+
+- 数字衣橱（上传 / Vision 识别 / CRUD）
+- AI 穿搭推荐（衣橱约束 + 天气可选）
+- Memory（风格画像反馈更新）
+- 个人信息画像
+- 旅行穿搭规划
+- 购物助手（商品图分析）
+- 商品推荐卡片 +「去购买」+ `commerce_clicks` 点击记录 MVP
+- RAG + pgvector 第一版（衣橱 / 知识混合检索）
+- Analytics 第一版（`event_logs` + `/profile/metrics`）
+- Expo 移动端 MVP（登录、衣橱、推荐、旅行、购物）
+
+### 未完成 / 后续规划
 
 | 能力 | 状态 |
 |------|------|
-| React Native 移动端 | 未实现，当前为 Next.js Web |
-| FastAPI 独立后端 | 未实现，使用 Server Actions |
-| LangGraph 真 Agent Orchestrator | 未实现，轻量 Workflow |
-| 批量衣柜照片识别 | 未实现，仅单件上传 |
-| 淘宝/京东/小红书链接解析 | 未实现 |
-| 自动同步购物记录 | 未实现 |
-| AI 虚拟试穿图 | 未实现 |
-| AR 试穿 | 未实现 |
-| 商业推荐 / 佣金闭环 | 未实现 |
-| 社交分享 | 未实现 |
-| 完整商业指标（留存、Precision@K 等） | 未实现 |
+| FastAPI 独立后端 | 未做；当前为 Next.js 全栈 |
+| LangGraph 真 Agent | 未做；轻量 Workflow |
+| Expo 移动端正式发布 / 深链稳定性 / 移动端指标页 | MVP 已实现；发布与指标页待完善 |
+| 批量衣柜识别 | 未做，仅单件上传 |
+| 电商链接解析 | 未做 |
+| 真实淘宝联盟佣金闭环 | 未做；当前仅点击追踪 MVP |
+| AI 虚拟试穿 | 未做 |
+| AR 试穿 | 未做 |
+| 社交分享 | 未做 |
+| 完整留存 / Precision@K / Recall@K | 未做 |
 
 ### 后续优先方向
 
 1. 扩大知识库规模并优化 embedding 召回权重
 2. 旅行/购物场景独立评测集
-3. 移动端功能深化（旅行、购物、Analytics 原生页）
+3. 移动端深链稳定性与指标页
 
 ---
 
