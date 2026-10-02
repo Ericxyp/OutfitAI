@@ -16,6 +16,7 @@
     "test:user-effect-metrics": "tsx scripts/test-user-effect-metrics.ts",
     "test:auth-password-login": "tsx scripts/test-auth-password-login.ts",
     "test:batch-upload": "tsx scripts/test-batch-upload.ts",
+    "test:weather-location": "tsx scripts/test-weather-location.ts",
     "backfill:closet-embeddings": "tsx scripts/backfill-closet-embeddings.ts",
     "backfill:style-knowledge-embeddings": "tsx scripts/backfill-style-knowledge-embeddings.ts"
   },

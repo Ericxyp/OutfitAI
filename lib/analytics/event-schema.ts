@@ -22,6 +22,10 @@ export const ANALYTICS_EVENT_NAMES = [
   "personal_profile_failed",
   "style_profile_updated",
   "style_profile_failed",
+  "weather_location_requested",
+  "weather_location_succeeded",
+  "weather_location_failed",
+  "weather_manual_city_used",
 ] as const;
 
 export type AnalyticsEventName = (typeof ANALYTICS_EVENT_NAMES)[number];
@@ -112,6 +116,10 @@ const FEATURE_EVENT_LABELS: Record<string, string> = {
   personal_profile_failed: "保存个人信息失败",
   style_profile_updated: "风格画像更新",
   style_profile_failed: "风格画像更新失败",
+  weather_location_requested: "请求天气位置",
+  weather_location_succeeded: "天气位置成功",
+  weather_location_failed: "天气位置失败",
+  weather_manual_city_used: "使用手动城市推荐",
 };
 
 const LEGACY_REASON_PATTERNS: Array<{ pattern: RegExp; reason: FailureReason }> =

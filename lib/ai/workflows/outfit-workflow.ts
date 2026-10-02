@@ -17,7 +17,11 @@ import {
   retrieveClosetCandidatesHybridSafe,
 } from "@/lib/recommendation/closet-retriever";
 import { parseRecommendationRequirement } from "@/lib/recommendation/rule-engine";
-import { getWeatherByCoordinates } from "@/lib/weather";
+import { getWeatherByCity, getWeatherByCoordinates } from "@/lib/weather";
+import {
+  buildWeatherLocationEventMetadata,
+  normalizeWeatherLocationInput,
+} from "@/lib/weather-location";
 import { createClient } from "@/lib/supabase/server";
 import { logger, safeErrorFields } from "@/lib/logger";
 import type {
@@ -57,29 +61,37 @@ async function trackRecommendationFailed(
   });
 }
 
-async function resolveWeatherContext(
+/**
+ * 根据位置输入解析天气：
+ * - coordinates → getWeatherByCoordinates
+ * - city → getWeatherByCity
+ * - undefined / 非法 → null
+ * 任何失败都返回 null，调用方继续走无天气推荐，不会让推荐整体失败。
+ */
+export async function resolveWeatherContext(
   location?: GenerateRecommendationOptions["location"]
 ): Promise<WeatherContext | null> {
-  const hasLocation = Boolean(
-    location &&
-      Number.isFinite(location.latitude) &&
-      Number.isFinite(location.longitude)
-  );
+  const normalized = location ? normalizeWeatherLocationInput(location) : null;
 
-  if (!hasLocation) {
+  if (!normalized) {
     logger.debug("[outfitWorkflow] weather skipped", {
       hasLocation: false,
+      invalidLocation: Boolean(location),
       weatherResult: false,
     });
     return null;
   }
 
   try {
-    const weather = await getWeatherByCoordinates(location!);
+    const weather =
+      normalized.type === "city"
+        ? await getWeatherByCity(normalized.city)
+        : await getWeatherByCoordinates(normalized);
     const weatherResult = weather !== null;
 
     logger.debug("[outfitWorkflow] weather lookup finished", {
       hasLocation: true,
+      locationType: normalized.type,
       weatherResult,
       ...(weather
         ? {
@@ -99,6 +111,7 @@ async function resolveWeatherContext(
     });
     logger.debug("[outfitWorkflow] weather lookup finished", {
       hasLocation: true,
+      locationType: normalized.type,
       weatherResult: false,
     });
     return null;
@@ -141,6 +154,20 @@ export async function runOutfitWorkflow(
   }
 
   const weatherContext = await resolveWeatherContext(options?.location);
+  const locationType = options?.location
+    ? normalizeWeatherLocationInput(options.location)?.type
+    : undefined;
+
+  if (locationType === "city") {
+    await trackEvent({
+      userId,
+      eventName: "weather_manual_city_used",
+      metadata: buildWeatherLocationEventMetadata({
+        source: "manual_city",
+        hasWeather: weatherContext !== null,
+      }),
+    });
+  }
   const [styleProfile, personalProfile] = await Promise.all([
     getUserStyleProfile(userId, supabase),
     getUserPersonalProfile(userId, supabase),
@@ -180,6 +207,7 @@ export async function runOutfitWorkflow(
 
   logger.info("[outfitWorkflow] calling generateOutfit", {
     hasLocation: Boolean(options?.location),
+    locationType: locationType ?? "none",
     hasWeather: weatherContext !== null,
     hasStyleProfile: styleProfile !== null && styleProfile.feedbackCount > 0,
     hasPersonalProfile: personalProfile !== null,

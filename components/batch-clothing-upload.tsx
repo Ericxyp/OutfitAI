@@ -20,11 +20,8 @@ import {
 } from "@/lib/batch/file-validation";
 import { compressImageToBase64 } from "@/lib/closet/compress-image";
 import { formatBatchAnalysisError } from "@/lib/closet/form-validation";
+import { createClientId } from "@/lib/client-id";
 import type { ClosetItemFormValues, ClothingOptions } from "@/types/closet";
-
-function createClientId() {
-  return crypto.randomUUID();
-}
 
 function updateItemById(
   items: BatchUploadItem[],
