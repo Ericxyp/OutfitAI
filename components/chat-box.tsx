@@ -26,34 +26,25 @@ import {
   buildTravelGuideMessage,
   detectTravelIntent,
 } from "@/lib/travel-intent";
-import type { LocationInput } from "@/types/weather";
+import { useWeatherLocation } from "@/components/use-weather-location";
+import { WeatherLocationPicker } from "@/components/weather-location-picker";
+import { createClientId } from "@/lib/client-id";
 
 function createId() {
-  return crypto.randomUUID();
+  return createClientId();
 }
 
-type LocationStatus = "idle" | "loading" | "success" | "error";
+type ChatBoxProps = {
+  /** 当前登录用户的 Supabase user.id，用于按账号隔离本地位置记忆；未登录为 null */
+  userId?: string | null;
+};
 
-function getLocationButtonLabel(status: LocationStatus): string {
-  switch (status) {
-    case "loading":
-      return "定位中...";
-    case "success":
-      return "已使用当前位置";
-    case "error":
-      return "定位失败，仍可继续推荐";
-    default:
-      return "使用当前位置";
-  }
-}
-
-export function ChatBox() {
+export function ChatBox({ userId = null }: ChatBoxProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isHydrated, setIsHydrated] = useState(false);
-  const [location, setLocation] = useState<LocationInput | null>(null);
-  const [locationStatus, setLocationStatus] = useState<LocationStatus>("idle");
+  const weatherLocation = useWeatherLocation(userId);
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -131,14 +122,13 @@ export function ChatBox() {
     const trimmed = text.trim();
     if (!trimmed || isLoading) return;
 
-    const hasLocation =
-      location !== null &&
-      Number.isFinite(location.latitude) &&
-      Number.isFinite(location.longitude);
+    // 在发送时读取当前位置快照；清除位置后不会再发送旧位置
+    const requestLocation = weatherLocation.requestLocation;
 
     console.log("[ChatBox] send recommendation", {
-      hasLocation,
-      locationStatus,
+      hasLocation: Boolean(requestLocation),
+      locationType: requestLocation?.type ?? "none",
+      locationStatus: weatherLocation.state.status,
     });
 
     setMessages((prev) => [
@@ -185,7 +175,7 @@ export function ChatBox() {
     setIsLoading(true);
 
     const result = await generateRecommendation(trimmed, {
-      location: location ?? undefined,
+      location: requestLocation,
     });
 
     setIsLoading(false);
@@ -220,7 +210,7 @@ export function ChatBox() {
     const result = await regenerateRecommendation(
       recommendation.requestText,
       recommendation.selectedItemIds,
-      { location: location ?? undefined }
+      { location: weatherLocation.requestLocation }
     );
 
     setIsLoading(false);
@@ -243,39 +233,6 @@ export function ChatBox() {
 
   const handleQuickQuestion = (question: string) => {
     handleSend(question);
-  };
-
-  const handleUseLocation = () => {
-    if (locationStatus === "loading" || isLoading) return;
-
-    if (!navigator.geolocation) {
-      setLocation(null);
-      setLocationStatus("error");
-      return;
-    }
-
-    setLocationStatus("loading");
-
-    navigator.geolocation.getCurrentPosition(
-      (position) => {
-        setLocation({
-          latitude: position.coords.latitude,
-          longitude: position.coords.longitude,
-        });
-        setLocationStatus("success");
-        console.log("[ChatBox] location acquired", { hasLocation: true });
-      },
-      () => {
-        setLocation(null);
-        setLocationStatus("error");
-        console.log("[ChatBox] location failed", { hasLocation: false });
-      },
-      {
-        enableHighAccuracy: false,
-        timeout: 10000,
-        maximumAge: 300000,
-      }
-    );
   };
 
   const handleClearChat = () => {
@@ -367,22 +324,10 @@ export function ChatBox() {
           </>
         )}
 
-        <div className="mb-3">
-          <button
-            type="button"
-            onClick={handleUseLocation}
-            disabled={isLoading || locationStatus === "loading"}
-            className={`rounded-full px-3.5 py-2 text-sm ring-1 transition-colors disabled:opacity-60 ${
-              locationStatus === "success"
-                ? "bg-accent text-foreground ring-border/80"
-                : locationStatus === "error"
-                  ? "bg-card text-muted ring-border/80 hover:bg-accent hover:text-foreground"
-                  : "bg-card text-foreground ring-border/80 hover:bg-accent"
-            }`}
-          >
-            {getLocationButtonLabel(locationStatus)}
-          </button>
-        </div>
+        <WeatherLocationPicker
+          controller={weatherLocation}
+          disabled={isLoading}
+        />
 
         <form onSubmit={handleSubmit} className="flex items-end gap-2">
           <div className="min-w-0 flex-1 rounded-2xl bg-card px-4 py-2.5 ring-1 ring-border/80">
