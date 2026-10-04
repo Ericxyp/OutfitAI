@@ -14,14 +14,23 @@ import { getUserPersonalProfile } from "@/lib/memory/personal-profile";
 import { getUserStyleProfile } from "@/lib/memory/style-profile";
 import {
   buildRecommendationContext,
+  filterEligibleItems,
   retrieveClosetCandidatesHybridSafe,
 } from "@/lib/recommendation/closet-retriever";
-import { parseRecommendationRequirement } from "@/lib/recommendation/rule-engine";
-import { getWeatherByCity, getWeatherByCoordinates } from "@/lib/weather";
+import {
+  parseRecommendationRequirement,
+  sanitizeRequirementTerms,
+} from "@/lib/recommendation/rule-engine";
+import {
+  getWeatherByCity,
+  getWeatherByCoordinates,
+  lookupWeatherForDate,
+} from "@/lib/weather";
 import {
   buildWeatherLocationEventMetadata,
   normalizeWeatherLocationInput,
 } from "@/lib/weather-location";
+import { isIsoDate } from "@/lib/requirements/schema";
 import { createClient } from "@/lib/supabase/server";
 import { logger, safeErrorFields } from "@/lib/logger";
 import type {
@@ -33,6 +42,9 @@ import type {
   GenerateRecommendationOptions,
   WeatherContext,
 } from "@/types/weather";
+
+const NO_ELIGIBLE_ITEMS_MESSAGE =
+  "排除不想穿的单品后没有可用的衣服了，请调整需求或添加更多衣服。";
 
 const INSUFFICIENT_CLOSET_MESSAGE =
   "你的衣橱还不够丰富，建议先添加至少 3 件衣服，我才能更好地帮你搭配。";
@@ -69,7 +81,8 @@ async function trackRecommendationFailed(
  * 任何失败都返回 null，调用方继续走无天气推荐，不会让推荐整体失败。
  */
 export async function resolveWeatherContext(
-  location?: GenerateRecommendationOptions["location"]
+  location?: GenerateRecommendationOptions["location"],
+  targetDate?: string
 ): Promise<WeatherContext | null> {
   const normalized = location ? normalizeWeatherLocationInput(location) : null;
 
@@ -83,8 +96,12 @@ export async function resolveWeatherContext(
   }
 
   try {
-    const weather =
-      normalized.type === "city"
+    const useDate = typeof targetDate === "string" && isIsoDate(targetDate);
+    const weather = useDate
+      ? await lookupWeatherForDate(normalized, targetDate).then((result) =>
+          result.status === "success" ? result.weather : null
+        )
+      : normalized.type === "city"
         ? await getWeatherByCity(normalized.city)
         : await getWeatherByCoordinates(normalized);
     const weatherResult = weather !== null;
@@ -92,6 +109,7 @@ export async function resolveWeatherContext(
     logger.debug("[outfitWorkflow] weather lookup finished", {
       hasLocation: true,
       locationType: normalized.type,
+      byDate: useDate,
       weatherResult,
       ...(weather
         ? {
@@ -118,6 +136,17 @@ export async function resolveWeatherContext(
   }
 }
 
+const REQUIREMENT_NOTES_MAX = 500;
+
+function sanitizeRequirementNotes(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const cleaned = value
+    .slice(0, REQUIREMENT_NOTES_MAX)
+    .replace(/[\u0000-\u0008\u000B-\u001F\u007F]/g, " ")
+    .trim();
+  return cleaned || undefined;
+}
+
 export async function runOutfitWorkflow(
   input: OutfitWorkflowInput
 ): Promise<OutfitWorkflowResult> {
@@ -126,20 +155,22 @@ export async function runOutfitWorkflow(
 
   const supabase = supabaseOverride ?? (await createClient());
 
-  const { data: closetItems, error: closetError } = await supabase
+  const { data: closetRows, error: closetError } = await supabase
     .from("closet_items")
     .select("*")
     .eq("user_id", userId)
     .eq("status", "ready")
     .order("created_at", { ascending: false });
 
-  if (closetError || !closetItems) {
+  if (closetError || !closetRows) {
     await trackRecommendationFailed(userId, "closet_read_failed", {
       hasWeather: false,
       requestLength: trimmed.length,
     });
     return { success: false, error: "读取衣橱失败，请稍后重试" };
   }
+
+  let closetItems = closetRows;
 
   if (closetItems.length < MIN_CLOSET_FOR_AI) {
     await trackRecommendationFailed(userId, "insufficient_closet", {
@@ -153,7 +184,31 @@ export async function runOutfitWorkflow(
     };
   }
 
-  const weatherContext = await resolveWeatherContext(options?.location);
+  // 用户在需求确认中明确排除的单品：只在当前用户自己的衣橱内过滤
+  const excludeIds = new Set(
+    (Array.isArray(options?.excludeClosetItemIds) ? options.excludeClosetItemIds : [])
+      .filter((id) => typeof id === "string")
+      .slice(0, 20)
+  );
+  if (excludeIds.size > 0) {
+    // 硬排除：即使剩余单品不足也不会把排除的单品放回候选
+    const remaining = closetItems.filter((item) => !excludeIds.has(item.id));
+    if (remaining.length === 0) {
+      return { success: false, error: NO_ELIGIBLE_ITEMS_MESSAGE };
+    }
+    if (remaining.length < MIN_CLOSET_FOR_AI) {
+      logger.warn("[outfitWorkflow] few items left after exclusion", {
+        excludeCount: excludeIds.size,
+        remainingCount: remaining.length,
+      });
+    }
+    closetItems = remaining;
+  }
+
+  const weatherContext = await resolveWeatherContext(
+    options?.location,
+    options?.targetDate
+  );
   const locationType = options?.location
     ? normalizeWeatherLocationInput(options.location)?.type
     : undefined;
@@ -173,6 +228,9 @@ export async function runOutfitWorkflow(
     getUserPersonalProfile(userId, supabase),
   ]);
 
+  // 结构化场景 / 风格词来自客户端选项，服务端重新清洗（与自定义标签同一套校验）
+  const requirementTerms = sanitizeRequirementTerms(options?.requirementTerms);
+
   const retrieval = await retrieveClosetCandidatesHybridSafe({
     supabase,
     userId,
@@ -180,19 +238,47 @@ export async function runOutfitWorkflow(
     requestText: trimmed,
     weatherContext,
     styleProfile,
+    requirementTerms,
   });
 
-  const requirement = parseRecommendationRequirement(trimmed);
+  const requirement = parseRecommendationRequirement(trimmed, requirementTerms);
+  const customTagMatchedCount = retrieval.debugScores.filter(
+    (score) => (score.exactCustomOccasionMatches ?? 0) + (score.exactCustomStyleMatches ?? 0) > 0
+  ).length;
+  const customTagBonusedCount = retrieval.debugScores.filter((score) => (score.customTagBonus ?? 0) > 0).length;
+  // 仅服务端调试日志：每个候选的规则分 / 语义分 / 自定义标签奖励 / 最终分（不含标签原文）
+  logger.debug("[outfitWorkflow] candidate scores", {
+    customTagMatchedCount,
+    customTagBonusedCount,
+    // logger 只接受原始类型：候选明细序列化为 JSON 字符串（最多 20 条）
+    candidates: JSON.stringify(
+      retrieval.debugScores.slice(0, 20).map((score) => ({
+        itemId: score.itemId,
+        exactCustomOccasionMatches: score.exactCustomOccasionMatches ?? 0,
+        exactCustomStyleMatches: score.exactCustomStyleMatches ?? 0,
+        customTagBonus: score.customTagBonus ?? 0,
+        ruleScore: Math.round((score.ruleScore ?? score.total) * 10) / 10,
+        semanticScore: Math.round((score.semanticScore ?? 0) * 10) / 10,
+        finalScore: Math.round((score.finalScore ?? score.total) * 10) / 10,
+      }))
+    ),
+  });
+
   const recommendationContext = buildRecommendationContext(
     retrieval,
     requirement,
     closetItems.length
   );
 
+  // 候选不足时的 fallback 仍执行硬过滤（明确不喜欢的单品不能重新进入）
+  const hardFilteredItems = filterEligibleItems(closetItems, styleProfile);
+  if (hardFilteredItems.length === 0) {
+    return { success: false, error: NO_ELIGIBLE_ITEMS_MESSAGE };
+  }
   const candidateItems =
     retrieval.candidateItems.length >= MIN_CLOSET_FOR_AI
       ? retrieval.candidateItems
-      : closetItems;
+      : hardFilteredItems;
 
   const styleKnowledge = await retrieveStyleKnowledge({
     supabase,
@@ -222,6 +308,7 @@ export async function runOutfitWorkflow(
   try {
     const aiResult = await generateOutfit(trimmed, candidateItems, {
       excludeItemIds: options?.excludeItemIds,
+      requirementNotes: sanitizeRequirementNotes(options?.requirementNotes),
       weatherContext,
       styleProfile,
       personalProfile,
@@ -292,6 +379,9 @@ export async function runOutfitWorkflow(
         totalClosetCount: closetItems.length,
         occasion: aiResult.occasion,
         feature: "outfit",
+        // 只记录数量，不记录标签原文
+        customTagMatchedCandidateCount: customTagMatchedCount,
+        customTagBonusedCandidateCount: customTagBonusedCount,
       },
     });
 

@@ -4,8 +4,13 @@ import type {
   WeatherLocationInput,
   WeatherLookupResult,
 } from "@/types/weather";
+
+export type WeatherDateLookupResult =
+  | WeatherLookupResult
+  | { status: "out_of_range" };
 import { logger, safeErrorFields } from "@/lib/logger";
 import {
+  CHINESE_CITY_ALIASES,
   isValidCoordinates,
   normalizeWeatherLocationInput,
   validateCityInput,
@@ -19,54 +24,6 @@ const WEATHERAPI_NOT_FOUND_CODE = 1006;
 /** 每次城市查询最多请求上游次数（原文 + 一个候选写法） */
 const MAX_CITY_QUERY_ATTEMPTS = 2;
 
-/**
- * 常见中文城市名 → WeatherAPI 可稳定识别的英文查询串。
- * WeatherAPI 对中文地名的匹配并不稳定，命中此表时优先使用英文名查询；
- * 未命中时直接用用户输入（已编码）查询。
- */
-const CHINESE_CITY_ALIASES: Record<string, string> = {
-  北京: "Beijing",
-  上海: "Shanghai",
-  广州: "Guangzhou",
-  深圳: "Shenzhen",
-  杭州: "Hangzhou",
-  南京: "Nanjing",
-  成都: "Chengdu",
-  重庆: "Chongqing",
-  武汉: "Wuhan",
-  西安: "Xian",
-  天津: "Tianjin",
-  长沙: "Changsha",
-  郑州: "Zhengzhou",
-  青岛: "Qingdao",
-  厦门: "Xiamen",
-  沈阳: "Shenyang",
-  大连: "Dalian",
-  哈尔滨: "Harbin",
-  昆明: "Kunming",
-  济南: "Jinan",
-  合肥: "Hefei",
-  福州: "Fuzhou",
-  宁波: "Ningbo",
-  无锡: "Wuxi",
-  香港: "Hong Kong",
-  澳门: "Macau",
-  台北: "Taipei",
-  悉尼: "Sydney",
-  墨尔本: "Melbourne",
-  布里斯班: "Brisbane",
-  东京: "Tokyo",
-  大阪: "Osaka",
-  首尔: "Seoul",
-  新加坡: "Singapore",
-  伦敦: "London",
-  巴黎: "Paris",
-  纽约: "New York",
-  洛杉矶: "Los Angeles",
-  旧金山: "San Francisco",
-  多伦多: "Toronto",
-  温哥华: "Vancouver",
-};
 
 function getWeatherApiKey(): string | null {
   const key = process.env.WEATHER_API_KEY?.trim();
@@ -191,15 +148,20 @@ async function readWeatherApiErrorCode(
   return null;
 }
 
+type WeatherApiResponse =
+  | { status: "ok"; data: unknown }
+  | { status: "not_found" | "unavailable" };
+
 /**
- * 共用的实时天气查询。query 可以是城市名或 "lat,lon"，
- * 统一经过 encodeURIComponent。
- * 不会在日志 / 返回值中包含 Key、完整 URL 或供应商原始响应。
+ * 共用的 WeatherAPI 请求：query 统一经过 encodeURIComponent，
+ * 不会在日志 / 返回值中包含 Key、完整 URL 或供应商原始错误。
  */
-async function fetchCurrentWeather(
+async function requestWeatherApi(
+  endpoint: "current.json" | "forecast.json",
   query: string,
-  kind: "coordinates" | "city"
-): Promise<WeatherLookupResult> {
+  kind: "coordinates" | "city",
+  extraParams = ""
+): Promise<WeatherApiResponse> {
   const apiKey = getWeatherApiKey();
   if (!apiKey) {
     logger.warn("[weather] missing api key, skipping weather lookup");
@@ -208,11 +170,12 @@ async function fetchCurrentWeather(
 
   const baseUrl = getWeatherBaseUrl().replace(/\/$/, "");
   // lang=zh：天气描述返回中文（如“小雨”），与规则引擎的中文匹配（雨/雷/风）一致
-  const url = `${baseUrl}/current.json?key=${encodeURIComponent(apiKey)}&q=${encodeURIComponent(query)}&lang=zh`;
+  const url = `${baseUrl}/${endpoint}?key=${encodeURIComponent(apiKey)}&q=${encodeURIComponent(query)}&lang=zh${extraParams}`;
 
-  logger.debug("[weather] fetching current weather", {
+  logger.debug("[weather] fetching weather", {
     hasApiKey: true,
     queryKind: kind,
+    endpoint,
   });
 
   const controller = new AbortController();
@@ -242,31 +205,7 @@ async function fetchCurrentWeather(
       return { status: "unavailable" };
     }
 
-    const data: unknown = await response.json();
-    const weather = normalizeWeatherApiResponse(data, WEATHER_SOURCE);
-
-    if (!weather) {
-      logger.error("[weather] invalid response, failed to normalize", {
-        feature: "weather",
-        reason: "invalid_response",
-        errorName: "NormalizeError",
-        errorMessage: "failed to normalize current weather",
-      });
-      return { status: "unavailable" };
-    }
-
-    logger.debug("[weather] success", {
-      queryKind: kind,
-      temperatureC: weather.temperatureC,
-      condition: weather.condition,
-    });
-
-    return {
-      status: "success",
-      weather,
-      displayName: buildDisplayName(data, weather.locationName ?? query),
-      query,
-    };
+    return { status: "ok", data: (await response.json()) as unknown };
   } catch (error) {
     const isTimeout =
       error instanceof Error &&
@@ -283,6 +222,95 @@ async function fetchCurrentWeather(
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+function logNormalizeFailure() {
+  logger.error("[weather] invalid response, failed to normalize", {
+    feature: "weather",
+    reason: "invalid_response",
+    errorName: "NormalizeError",
+    errorMessage: "failed to normalize weather",
+  });
+}
+
+/** 实时天气查询（坐标 / 城市共用） */
+async function fetchCurrentWeather(
+  query: string,
+  kind: "coordinates" | "city"
+): Promise<WeatherLookupResult> {
+  const response = await requestWeatherApi("current.json", query, kind);
+  if (response.status !== "ok") return response;
+
+  const weather = normalizeWeatherApiResponse(response.data, WEATHER_SOURCE);
+  if (!weather) {
+    logNormalizeFailure();
+    return { status: "unavailable" };
+  }
+
+  logger.debug("[weather] success", {
+    queryKind: kind,
+    temperatureC: weather.temperatureC,
+    condition: weather.condition,
+  });
+
+  return {
+    status: "success",
+    weather,
+    displayName: buildDisplayName(response.data, weather.locationName ?? query),
+    query,
+  };
+}
+
+/** 预报覆盖的天数（WeatherAPI 免费版最多 3 天：今天 + 2 天） */
+export const WEATHER_FORECAST_DAYS = 3;
+
+/**
+ * 指定日期的天气：目标日期等于当地今天 → 使用实时天气；
+ * 在预报范围内 → 使用当日预报；否则 out_of_range。
+ */
+async function fetchWeatherForDate(
+  query: string,
+  kind: "coordinates" | "city",
+  isoDate: string
+): Promise<WeatherDateLookupResult> {
+  const response = await requestWeatherApi(
+    "forecast.json",
+    query,
+    kind,
+    `&days=${WEATHER_FORECAST_DAYS}&aqi=no&alerts=no`
+  );
+  if (response.status !== "ok") return response;
+
+  const data = response.data;
+  const location = isRecord(data) && isRecord(data.location) ? data.location : null;
+  const localDate =
+    typeof location?.localtime === "string" ? location.localtime.slice(0, 10) : null;
+  const locationName = typeof location?.name === "string" ? location.name : undefined;
+
+  let weather: WeatherContext | null = null;
+  if (localDate === isoDate) {
+    weather = normalizeWeatherApiResponse(data, WEATHER_SOURCE);
+  } else {
+    const days =
+      isRecord(data) && isRecord(data.forecast) && Array.isArray(data.forecast.forecastday)
+        ? data.forecast.forecastday
+        : [];
+    const day = days.find((entry) => isRecord(entry) && entry.date === isoDate);
+    if (!day) return { status: "out_of_range" };
+    weather = normalizeForecastDay(day, locationName, WEATHER_SOURCE);
+  }
+
+  if (!weather) {
+    logNormalizeFailure();
+    return { status: "unavailable" };
+  }
+
+  return {
+    status: "success",
+    weather,
+    displayName: buildDisplayName(data, weather.locationName ?? query),
+    query,
+  };
 }
 
 /** 城市查询候选：命中中文别名时优先英文名，其次原文；"上海市" 视同 "上海" */
@@ -314,20 +342,53 @@ export async function lookupWeatherByCoordinates(
 export async function lookupWeatherByCity(
   city: unknown
 ): Promise<WeatherLookupResult> {
+  return lookupCityWith(city, (candidate) => fetchCurrentWeather(candidate, "city"));
+}
+
+async function lookupCityWith<R extends { status: string }>(
+  city: unknown,
+  fetcher: (candidate: string) => Promise<R>
+): Promise<R | { status: "invalid_input" } | { status: "not_found" }> {
   const validated = validateCityInput(city);
   if (!validated.ok) {
     return { status: "invalid_input" };
   }
 
-  let lastResult: WeatherLookupResult = { status: "not_found" };
+  let lastResult: R | { status: "not_found" } = { status: "not_found" };
   for (const candidate of buildCityQueryCandidates(validated.city)) {
-    lastResult = await fetchCurrentWeather(candidate, "city");
+    lastResult = await fetcher(candidate);
     // 只有“找不到”才尝试下一个写法；服务不可用时直接返回，避免放大失败
     if (lastResult.status !== "not_found") {
       return lastResult;
     }
   }
   return lastResult;
+}
+
+/**
+ * 按日期查询天气（需求确认 Agent / 推荐工作流共用）。
+ * isoDate 为空时等价于实时天气查询。
+ */
+export async function lookupWeatherForDate(
+  location: WeatherLocationInput | LocationInput | unknown,
+  isoDate?: string | null
+): Promise<WeatherDateLookupResult> {
+  if (!isoDate) return lookupWeatherByLocation(location);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(isoDate)) return { status: "invalid_input" };
+
+  const normalized = normalizeWeatherLocationInput(location);
+  if (!normalized) return { status: "invalid_input" };
+
+  if (normalized.type === "city") {
+    return lookupCityWith(normalized.city, (candidate) =>
+      fetchWeatherForDate(candidate, "city", isoDate)
+    ) as Promise<WeatherDateLookupResult>;
+  }
+  return fetchWeatherForDate(
+    `${normalized.latitude},${normalized.longitude}`,
+    "coordinates",
+    isoDate
+  );
 }
 
 export async function lookupWeatherByLocation(

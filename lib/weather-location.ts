@@ -9,6 +9,55 @@ import type {
 
 export const CITY_INPUT_MAX_LENGTH = 80;
 
+/**
+ * 常见中文城市名 → WeatherAPI 可稳定识别的英文查询串。
+ * WeatherAPI 对中文地名的匹配并不稳定，命中此表时优先使用英文名查询；
+ * 未命中时直接用用户输入（已编码）查询。
+ */
+export const CHINESE_CITY_ALIASES: Record<string, string> = {
+  北京: "Beijing",
+  上海: "Shanghai",
+  广州: "Guangzhou",
+  深圳: "Shenzhen",
+  杭州: "Hangzhou",
+  南京: "Nanjing",
+  成都: "Chengdu",
+  重庆: "Chongqing",
+  武汉: "Wuhan",
+  西安: "Xian",
+  天津: "Tianjin",
+  长沙: "Changsha",
+  郑州: "Zhengzhou",
+  青岛: "Qingdao",
+  厦门: "Xiamen",
+  沈阳: "Shenyang",
+  大连: "Dalian",
+  哈尔滨: "Harbin",
+  昆明: "Kunming",
+  济南: "Jinan",
+  合肥: "Hefei",
+  福州: "Fuzhou",
+  宁波: "Ningbo",
+  无锡: "Wuxi",
+  香港: "Hong Kong",
+  澳门: "Macau",
+  台北: "Taipei",
+  悉尼: "Sydney",
+  墨尔本: "Melbourne",
+  布里斯班: "Brisbane",
+  东京: "Tokyo",
+  大阪: "Osaka",
+  首尔: "Seoul",
+  新加坡: "Singapore",
+  伦敦: "London",
+  巴黎: "Paris",
+  纽约: "New York",
+  洛杉矶: "Los Angeles",
+  旧金山: "San Francisco",
+  多伦多: "Toronto",
+  温哥华: "Vancouver",
+};
+
 export const WEATHER_LOCATION_MESSAGES = {
   not_found: "没有找到这个城市，请检查名称后重试。",
   unavailable: "暂时无法获取天气，你仍可继续生成普通穿搭。",

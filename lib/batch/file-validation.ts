@@ -164,6 +164,9 @@ export function analysisToFormValues(
     style_tags: [...(analysis.style_tags ?? [])],
     season_tags: [...(analysis.season_tags ?? [])],
     occasion_tags: [...(analysis.occasion_tags ?? [])],
+    // AI 识别只输出系统标签；自定义标签由用户手动添加，每件衣物独立
+    custom_style_tags: [],
+    custom_occasion_tags: [],
     notes: analysis.notes ?? "",
   };
 }

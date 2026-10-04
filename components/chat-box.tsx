@@ -7,46 +7,45 @@ import {
   PAGE_COPY,
   QUICK_QUESTIONS,
 } from "@/lib/constants";
-import {
-  generateRecommendation,
-  regenerateRecommendation,
-  type RecommendationResult,
-} from "@/lib/actions/recommendation";
-import {
-  CHAT_MESSAGES_STORAGE_KEY,
-  MessageList,
-  parseStoredChatMessages,
-  type ChatMessage,
-} from "@/components/message-list";
-import {
-  buildShoppingGuideMessage,
-  detectShoppingIntent,
-} from "@/lib/shopping-intent";
-import {
-  buildTravelGuideMessage,
-  detectTravelIntent,
-} from "@/lib/travel-intent";
+import { MessageList } from "@/components/message-list";
 import { useWeatherLocation } from "@/components/use-weather-location";
 import { WeatherLocationPicker } from "@/components/weather-location-picker";
-import { createClientId } from "@/lib/client-id";
+import { RequirementPanel } from "@/components/requirement-panel";
+import { useChat } from "@/components/use-chat";
 
-function createId() {
-  return createClientId();
-}
-
-type ChatBoxProps = {
-  /** 当前登录用户的 Supabase user.id，用于按账号隔离本地位置记忆；未登录为 null */
-  userId?: string | null;
-};
-
-export function ChatBox({ userId = null }: ChatBoxProps) {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+/**
+ * 首页对话展示组件：只负责输入框、滚动与 UI。
+ * 对话消息、需求确认与推荐生成等异步任务都在根布局的 ChatProvider 中，
+ * 本组件卸载（站内切到衣橱 / 我的）不会中断任务。
+ */
+export function ChatBox() {
+  const {
+    userId,
+    messages,
+    isHydrated,
+    requirementState,
+    isWorking,
+    isRegenerating,
+    isAwaitingRequirementInput,
+    sendMessage,
+    answerRequirementOption,
+    skipRequirementClarification,
+    confirmRequirement,
+    cancelRequirement,
+    modifyRequirement,
+    regenerateRecommendation,
+    clearChat,
+    setContextLocation,
+  } = useChat();
   const [input, setInput] = useState("");
-  const [isLoading, setIsLoading] = useState(false);
-  const [isHydrated, setIsHydrated] = useState(false);
   const weatherLocation = useWeatherLocation(userId);
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // 首页已选天气位置作为需求解析上下文（Provider 保存最新值，ChatBox 卸载后仍可用）
+  useEffect(() => {
+    setContextLocation(weatherLocation.requestLocation);
+  }, [setContextLocation, weatherLocation.requestLocation]);
 
   const scrollToBottom = useCallback(() => {
     requestAnimationFrame(() => {
@@ -69,131 +68,14 @@ export function ChatBox({ userId = null }: ChatBoxProps) {
   }, [input, resizeTextarea]);
 
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem(CHAT_MESSAGES_STORAGE_KEY);
-      if (!raw) return;
-
-      const restored = parseStoredChatMessages(raw);
-      if (restored === null) {
-        localStorage.removeItem(CHAT_MESSAGES_STORAGE_KEY);
-        return;
-      }
-
-      setMessages(restored);
-    } catch {
-      localStorage.removeItem(CHAT_MESSAGES_STORAGE_KEY);
-    } finally {
-      setIsHydrated(true);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!isHydrated) return;
-
-    try {
-      if (messages.length === 0) {
-        localStorage.removeItem(CHAT_MESSAGES_STORAGE_KEY);
-        return;
-      }
-
-      localStorage.setItem(
-        CHAT_MESSAGES_STORAGE_KEY,
-        JSON.stringify(messages)
-      );
-    } catch (error) {
-      console.error("Failed to persist chat messages:", error);
-    }
-  }, [messages, isHydrated]);
-
-  useEffect(() => {
     if (!isHydrated || messages.length === 0) return;
     scrollToBottom();
   }, [isHydrated, messages.length, scrollToBottom]);
 
-  const appendAssistantMessage = (content: string, isError = false) => {
-    setMessages((prev) => [
-      ...prev,
-      { id: createId(), role: "assistant", content, isError },
-    ]);
-    scrollToBottom();
-  };
-
-  const handleSend = async (text: string) => {
-    const trimmed = text.trim();
-    if (!trimmed || isLoading) return;
-
-    // 在发送时读取当前位置快照；清除位置后不会再发送旧位置
-    const requestLocation = weatherLocation.requestLocation;
-
-    console.log("[ChatBox] send recommendation", {
-      hasLocation: Boolean(requestLocation),
-      locationType: requestLocation?.type ?? "none",
-      locationStatus: weatherLocation.state.status,
-    });
-
-    setMessages((prev) => [
-      ...prev,
-      { id: createId(), role: "user", content: trimmed },
-    ]);
+  const handleSend = (text: string) => {
+    if (!text.trim() || isWorking) return;
     setInput("");
-    scrollToBottom();
-
-    const travelIntent = detectTravelIntent(trimmed);
-    if (travelIntent.isTravelPlan) {
-      const { content, actionHref } = buildTravelGuideMessage(travelIntent);
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: createId(),
-          role: "assistant",
-          content,
-          actionHref,
-          actionLabel: "去旅行穿搭规划",
-        },
-      ]);
-      scrollToBottom();
-      return;
-    }
-
-    const shoppingIntent = detectShoppingIntent(trimmed);
-    if (shoppingIntent.isShoppingCheck) {
-      const { content, actionHref } = buildShoppingGuideMessage();
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: createId(),
-          role: "assistant",
-          content,
-          actionHref,
-          actionLabel: "去购物助手",
-        },
-      ]);
-      scrollToBottom();
-      return;
-    }
-
-    setIsLoading(true);
-
-    const result = await generateRecommendation(trimmed, {
-      location: requestLocation,
-    });
-
-    setIsLoading(false);
-
-    if (!result.success) {
-      appendAssistantMessage(result.error, true);
-      return;
-    }
-
-    setMessages((prev) => [
-      ...prev,
-      {
-        id: createId(),
-        role: "recommendation",
-        recommendation: result.recommendation,
-      },
-    ]);
-    scrollToBottom();
+    void sendMessage(text);
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -201,48 +83,28 @@ export function ChatBox({ userId = null }: ChatBoxProps) {
     handleSend(input);
   };
 
-  const handleRegenerate = async (recommendation: RecommendationResult) => {
-    if (isLoading) return;
-
-    setIsLoading(true);
-    scrollToBottom();
-
-    const result = await regenerateRecommendation(
-      recommendation.requestText,
-      recommendation.selectedItemIds,
-      { location: weatherLocation.requestLocation }
-    );
-
-    setIsLoading(false);
-
-    if (!result.success) {
-      appendAssistantMessage(result.error, true);
-      return;
-    }
-
-    setMessages((prev) => [
-      ...prev,
-      {
-        id: createId(),
-        role: "recommendation",
-        recommendation: result.recommendation,
-      },
-    ]);
-    scrollToBottom();
-  };
-
   const handleQuickQuestion = (question: string) => {
     handleSend(question);
   };
 
-  const handleClearChat = () => {
-    setMessages([]);
-    try {
-      localStorage.removeItem(CHAT_MESSAGES_STORAGE_KEY);
-    } catch (error) {
-      console.error("Failed to clear chat messages:", error);
-    }
+  const handleRequirementModify = () => {
+    modifyRequirement();
+    requestAnimationFrame(() => textareaRef.current?.focus());
   };
+
+  const flowStatus = requirementState.status;
+  const inputPlaceholder =
+    flowStatus === "needs_clarification"
+      ? "也可以直接输入你的回答…"
+      : isAwaitingRequirementInput
+        ? "输入要修改的内容，例如：改成后天"
+        : PAGE_COPY.home.placeholder;
+
+  // 需求面板变化时滚到底部，确保追问 / 确认卡可见
+  useEffect(() => {
+    if (flowStatus === "idle") return;
+    scrollToBottom();
+  }, [flowStatus, scrollToBottom]);
 
   const showClosetHint = messages.some(
     (m) =>
@@ -263,8 +125,8 @@ export function ChatBox({ userId = null }: ChatBoxProps) {
           {messages.length > 0 && (
             <button
               type="button"
-              onClick={handleClearChat}
-              disabled={isLoading}
+              onClick={clearChat}
+              disabled={isWorking}
               className="shrink-0 rounded-full px-3 py-1.5 text-xs text-muted transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"
             >
               清空对话
@@ -279,9 +141,21 @@ export function ChatBox({ userId = null }: ChatBoxProps) {
       >
         <MessageList
           messages={messages}
-          isLoading={isLoading}
-          onRegenerate={handleRegenerate}
+          isLoading={isRegenerating || flowStatus === "generating"}
+          onRegenerate={(recommendation) => void regenerateRecommendation(recommendation)}
         />
+        {flowStatus !== "idle" && (
+          <div className="pb-2 pt-1">
+            <RequirementPanel
+              state={requirementState}
+              onOption={answerRequirementOption}
+              onSkip={skipRequirementClarification}
+              onConfirm={() => void confirmRequirement()}
+              onModify={handleRequirementModify}
+              onCancel={cancelRequirement}
+            />
+          </div>
+        )}
       </div>
 
       <div className="shrink-0 border-t border-border/50 bg-background/95 px-4 pb-3 pt-3 backdrop-blur-sm">
@@ -297,7 +171,7 @@ export function ChatBox({ userId = null }: ChatBoxProps) {
           </Link>
         )}
 
-        {messages.length === 0 && !isLoading && (
+        {messages.length === 0 && !isWorking && flowStatus === "idle" && (
           <>
             <Link
               href="/shopping"
@@ -314,7 +188,7 @@ export function ChatBox({ userId = null }: ChatBoxProps) {
                 key={question}
                 type="button"
                 onClick={() => handleQuickQuestion(question)}
-                disabled={isLoading}
+                disabled={isWorking}
                 className="shrink-0 rounded-full bg-card px-3.5 py-2 text-sm text-foreground ring-1 ring-border/80 transition-colors hover:bg-accent disabled:opacity-60"
               >
                 {question}
@@ -326,7 +200,7 @@ export function ChatBox({ userId = null }: ChatBoxProps) {
 
         <WeatherLocationPicker
           controller={weatherLocation}
-          disabled={isLoading}
+          disabled={isWorking}
         />
 
         <form onSubmit={handleSubmit} className="flex items-end gap-2">
@@ -335,25 +209,26 @@ export function ChatBox({ userId = null }: ChatBoxProps) {
               ref={textareaRef}
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder={PAGE_COPY.home.placeholder}
+              placeholder={inputPlaceholder}
               rows={1}
-              disabled={isLoading}
+              enterKeyHint="send"
+              disabled={isWorking}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
                   handleSend(input);
                 }
               }}
-              className="w-full resize-none bg-transparent text-sm leading-relaxed text-foreground placeholder:text-muted focus:outline-none disabled:opacity-60"
+              className="w-full resize-none bg-transparent text-base leading-relaxed sm:text-sm text-foreground placeholder:text-muted focus:outline-none disabled:opacity-60"
             />
           </div>
           <button
             type="submit"
-            disabled={isLoading || !input.trim()}
+            disabled={isWorking || !input.trim()}
             aria-label={PAGE_COPY.home.sendAria}
             className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-foreground text-background transition-opacity hover:opacity-90 disabled:opacity-40"
           >
-            {isLoading ? (
+            {isWorking ? (
               <span className="h-4 w-4 animate-spin rounded-full border-2 border-background/30 border-t-background" />
             ) : (
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden>

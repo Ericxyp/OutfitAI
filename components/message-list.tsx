@@ -3,103 +3,13 @@ import { PAGE_COPY } from "@/lib/constants";
 import type { RecommendationResult } from "@/lib/actions/recommendation";
 import { OutfitResultCard } from "@/components/outfit-result-card";
 
-export type ChatMessage =
-  | { id: string; role: "user"; content: string }
-  | {
-      id: string;
-      role: "assistant";
-      content: string;
-      isError?: boolean;
-      actionHref?: string;
-      actionLabel?: string;
-    }
-  | {
-      id: string;
-      role: "recommendation";
-      recommendation: RecommendationResult;
-    };
-
-export const CHAT_MESSAGES_STORAGE_KEY = "outfitai.chat.messages";
-
-function isValidRecommendation(value: unknown): value is RecommendationResult {
-  if (!value || typeof value !== "object") return false;
-
-  const rec = value as Record<string, unknown>;
-
-  return (
-    typeof rec.id === "string" &&
-    typeof rec.requestText === "string" &&
-    typeof rec.title === "string" &&
-    Array.isArray(rec.selectedItemIds) &&
-    rec.selectedItemIds.every((id) => typeof id === "string") &&
-    typeof rec.summary === "string" &&
-    typeof rec.reasoning === "string" &&
-    Array.isArray(rec.styleTags) &&
-    rec.styleTags.every((tag) => typeof tag === "string") &&
-    typeof rec.occasion === "string" &&
-    Array.isArray(rec.alternatives) &&
-    rec.alternatives.every((alt) => typeof alt === "string") &&
-    Array.isArray(rec.items)
-  );
-}
-
-export function isValidChatMessage(value: unknown): value is ChatMessage {
-  if (!value || typeof value !== "object") return false;
-
-  const message = value as Record<string, unknown>;
-
-  if (typeof message.id !== "string" || typeof message.role !== "string") {
-    return false;
-  }
-
-  if (message.role === "user") {
-    return typeof message.content === "string";
-  }
-
-  if (message.role === "assistant") {
-    if (typeof message.content !== "string") {
-      return false;
-    }
-
-    if (message.isError !== undefined && typeof message.isError !== "boolean") {
-      return false;
-    }
-
-    if (message.actionHref !== undefined) {
-      if (
-        typeof message.actionHref !== "string" ||
-        !message.actionHref.startsWith("/")
-      ) {
-        return false;
-      }
-    }
-
-    if (
-      message.actionLabel !== undefined &&
-      typeof message.actionLabel !== "string"
-    ) {
-      return false;
-    }
-
-    return true;
-  }
-
-  if (message.role === "recommendation") {
-    return isValidRecommendation(message.recommendation);
-  }
-
-  return false;
-}
-
-export function parseStoredChatMessages(raw: string): ChatMessage[] | null {
-  const parsed: unknown = JSON.parse(raw);
-
-  if (!Array.isArray(parsed)) {
-    return null;
-  }
-
-  return parsed.filter(isValidChatMessage);
-}
+export {
+  CHAT_MESSAGES_STORAGE_KEY,
+  isValidChatMessage,
+  parseStoredChatMessages,
+  type ChatMessage,
+} from "@/lib/chat/message-storage";
+import type { ChatMessage } from "@/lib/chat/message-storage";
 
 function UserBubble({ content }: { content: string }) {
   return (

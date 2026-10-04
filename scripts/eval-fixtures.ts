@@ -26,19 +26,23 @@ export const ITEM_IDS = {
   silkScarf: "11111111-1111-4111-8111-111111110016",
 } as const;
 
+type OptionalItemFields =
+  | "embedding"
+  | "embedding_text"
+  | "embedding_updated_at"
+  | "custom_style_tags"
+  | "custom_occasion_tags";
+
 function item(
-  partial: Omit<
-    ClosetItem,
-    "embedding" | "embedding_text" | "embedding_updated_at"
-  > &
-    Partial<
-      Pick<ClosetItem, "embedding" | "embedding_text" | "embedding_updated_at">
-    >
+  partial: Omit<ClosetItem, OptionalItemFields> &
+    Partial<Pick<ClosetItem, OptionalItemFields>>
 ): ClosetItem {
   return {
     embedding: null,
     embedding_text: null,
     embedding_updated_at: null,
+    custom_style_tags: [],
+    custom_occasion_tags: [],
     ...partial,
   };
 }

@@ -13,7 +13,12 @@ import {
   getClothingRejectionError,
   isAcceptableClothing,
 } from "@/lib/closet/clothing-gate";
-import { upsertClosetItemEmbedding } from "@/lib/closet/upsert-closet-embedding";
+import {
+  getMissingCustomTagColumnsMessage,
+  isMissingCustomTagColumnsError,
+  refreshClosetItemEmbedding,
+} from "@/lib/closet/closet-persistence";
+import { trackCustomTagChange } from "@/lib/closet/custom-tag-events";
 import { validateClosetItemFormValues } from "@/lib/closet/form-validation";
 import { CLOSET_STORAGE_BUCKET } from "@/lib/constants";
 import { createClient } from "@/lib/supabase/server";
@@ -172,6 +177,8 @@ export async function saveBatchClosetItem(
     style_tags: formData.getAll("style_tags").map(String),
     season_tags: formData.getAll("season_tags").map(String),
     occasion_tags: formData.getAll("occasion_tags").map(String),
+    custom_style_tags: formData.getAll("custom_style_tags").map(String),
+    custom_occasion_tags: formData.getAll("custom_occasion_tags").map(String),
   });
 
   if (!validation.ok) {
@@ -222,6 +229,8 @@ export async function saveBatchClosetItem(
       style_tags: values.style_tags,
       season_tags: values.season_tags,
       occasion_tags: values.occasion_tags,
+      custom_style_tags: values.custom_style_tags,
+      custom_occasion_tags: values.custom_occasion_tags,
       notes: values.notes || null,
       status: "ready",
     })
@@ -251,9 +260,14 @@ export async function saveBatchClosetItem(
         source: "batch",
       },
     });
+    if (isMissingCustomTagColumnsError(error)) {
+      console.error("[batch] custom tag columns missing, run migration");
+      return { success: false, error: getMissingCustomTagColumnsMessage() };
+    }
     return { success: false, error: "保存失败，请稍后重试" };
   }
 
+  let embeddingUpdated = false;
   try {
     const { data: fullItem } = await supabase
       .from("closet_items")
@@ -263,11 +277,22 @@ export async function saveBatchClosetItem(
       .single();
 
     if (fullItem) {
-      await upsertClosetItemEmbedding(supabase, fullItem);
+      embeddingUpdated = await refreshClosetItemEmbedding(supabase, fullItem);
     }
-  } catch (embeddingError) {
-    console.warn("[batch] embedding update skipped:", embeddingError);
+  } catch {
+    console.warn("[batch] embedding update skipped");
   }
+
+  await trackCustomTagChange({
+    userId: user.id,
+    itemId: data.id,
+    source: "batch",
+    previousCount: 0,
+    customStyleTags: values.custom_style_tags,
+    customOccasionTags: values.custom_occasion_tags,
+    embeddingUpdated,
+    validationErrorType: validation.customTagErrorType,
+  });
 
   await trackEvent({
     userId: user.id,

@@ -348,6 +348,12 @@ export function BatchClothingUpload({ options }: { options: ClothingOptions }) {
       for (const tag of currentItem.formValues.occasion_tags) {
         formData.append("occasion_tags", tag);
       }
+      for (const tag of currentItem.formValues.custom_style_tags ?? []) {
+        formData.append("custom_style_tags", tag);
+      }
+      for (const tag of currentItem.formValues.custom_occasion_tags ?? []) {
+        formData.append("custom_occasion_tags", tag);
+      }
 
       const result = await saveBatchClosetItem(formData);
 

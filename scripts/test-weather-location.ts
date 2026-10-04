@@ -608,6 +608,8 @@ function sampleItem(name: string): ClosetItem {
     style_tags: [],
     season_tags: [],
     occasion_tags: [],
+    custom_style_tags: [],
+    custom_occasion_tags: [],
     notes: null,
     status: "ready",
     embedding: null,

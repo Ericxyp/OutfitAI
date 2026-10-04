@@ -1,9 +1,18 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { DeleteClothingButton } from "@/components/delete-clothing-button";
+import { readCustomTags } from "@/lib/closet/custom-tags";
 import { createClient } from "@/lib/supabase/server";
 
-function TagList({ label, tags }: { label: string; tags: string[] }) {
+function TagList({
+  label,
+  tags,
+  custom = false,
+}: {
+  label: string;
+  tags: string[];
+  custom?: boolean;
+}) {
   if (tags.length === 0) return null;
 
   return (
@@ -13,7 +22,11 @@ function TagList({ label, tags }: { label: string; tags: string[] }) {
         {tags.map((tag) => (
           <span
             key={tag}
-            className="rounded-full bg-accent px-3 py-1 text-sm text-foreground"
+            className={
+              custom
+                ? "rounded-full border border-dashed border-foreground/40 px-3 py-1 text-sm text-foreground"
+                : "rounded-full bg-accent px-3 py-1 text-sm text-foreground"
+            }
           >
             {tag}
           </span>
@@ -61,6 +74,8 @@ export default async function ClosetItemDetailPage({
     notFound();
   }
 
+  const { customStyleTags, customOccasionTags } = readCustomTags(item);
+
   return (
     <div className="h-full overflow-y-auto overscroll-contain px-4 pt-6 pb-6">
       <header className="mb-4 flex items-center gap-3">
@@ -79,9 +94,15 @@ export default async function ClosetItemDetailPage({
             />
           </svg>
         </Link>
-        <h1 className="truncate text-lg font-semibold text-foreground">
+        <h1 className="min-w-0 flex-1 truncate text-lg font-semibold text-foreground">
           {item.name ?? "衣服详情"}
         </h1>
+        <Link
+          href={`/closet/${item.id}/edit`}
+          className="flex h-10 shrink-0 items-center rounded-full bg-card px-3 text-sm font-medium text-foreground ring-1 ring-border/60 transition-colors hover:bg-accent"
+        >
+          编辑
+        </Link>
       </header>
 
       <div className="mb-4 overflow-hidden rounded-2xl bg-card shadow-sm ring-1 ring-border/60">
@@ -108,6 +129,8 @@ export default async function ClosetItemDetailPage({
         <TagList label="风格标签" tags={item.style_tags} />
         <TagList label="季节" tags={item.season_tags} />
         <TagList label="适合场景" tags={item.occasion_tags} />
+        <TagList label="自定义风格" tags={customStyleTags} custom />
+        <TagList label="自定义场景" tags={customOccasionTags} custom />
         {item.notes && (
           <div>
             <p className="mb-1 text-sm text-muted">备注</p>

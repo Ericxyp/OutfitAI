@@ -2,10 +2,43 @@ import type { ClosetItem } from "@/types/database";
 import type { StyleProfileContext } from "@/lib/memory/style-profile";
 import type {
   RecommendationRequirement,
+  RequirementMatchTerms,
   ScoreBreakdown,
   ScoredClosetItem,
 } from "@/types/recommendation";
 import type { WeatherContext } from "@/types/weather";
+import {
+  getSupplementalCanonicalTags,
+  normalizeTagForMatch,
+  validateCustomTag,
+} from "@/lib/closet/custom-tags";
+import { computeCustomTagBonus } from "@/lib/recommendation/custom-tag-bonus";
+
+/** 结构化需求词数量上限（每类） */
+const MAX_STRUCTURED_TERMS = 8;
+
+function normalizeTerms(values: readonly unknown[]): string[] {
+  const result: string[] = [];
+  for (const value of values) {
+    const key = normalizeTagForMatch(value);
+    if (key && !result.includes(key)) result.push(key);
+  }
+  return result;
+}
+
+/** 来自需求确认 Agent 的结构化词：与自定义标签同一套校验，非法内容丢弃 */
+export function sanitizeRequirementTerms(raw: unknown): RequirementMatchTerms {
+  const pick = (value: unknown) =>
+    Array.isArray(value)
+      ? value
+          .slice(0, 20)
+          .map((entry) => validateCustomTag(entry))
+          .flatMap((result) => (result.ok ? [result.tag] : []))
+          .slice(0, MAX_STRUCTURED_TERMS)
+      : [];
+  const record = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : {};
+  return { occasions: pick(record.occasions), styles: pick(record.styles) };
+}
 
 export type ClosetItemScoreContext = {
   requirement: RecommendationRequirement;
@@ -18,6 +51,11 @@ const STYLE_WEIGHT = 0.25;
 const WEATHER_WEIGHT = 0.2;
 const COLOR_WEIGHT = 0.15;
 const USER_PREFERENCE_WEIGHT = 0.1;
+/**
+ * 自定义标签映射到系统标签后的“弱补充”加分：
+ * 低于系统标签命中（+12 / +10）和文本命中（+8），且只在系统标签未命中时生效。
+ */
+const CUSTOM_CANONICAL_BONUS = 4;
 
 const BASE_COLORS = ["黑", "白", "灰", "米", "蓝", "杏", "卡其", "藏青"];
 
@@ -66,14 +104,20 @@ function itemSearchText(item: ClosetItem): string {
 }
 
 export function parseRecommendationRequirement(
-  requestText: string
+  requestText: string,
+  structuredTerms?: RequirementMatchTerms | null
 ): RecommendationRequirement {
   const occasionHints: string[] = [];
   const styleHints: string[] = [];
+  /** 固定关键词表中实际命中的原词（如“健身”），用于精确自定义标签匹配 */
+  const occasionKeywords: string[] = [];
 
   for (const { pattern, hints } of OCCASION_KEYWORD_MAP) {
     if (pattern.test(requestText)) {
       occasionHints.push(...hints);
+      for (const match of requestText.matchAll(new RegExp(pattern.source, "g"))) {
+        occasionKeywords.push(match[0]);
+      }
     }
   }
 
@@ -91,6 +135,11 @@ export function parseRecommendationRequirement(
     rawText: requestText,
     occasionHints: [...new Set(occasionHints)],
     styleHints: [...new Set(styleHints)],
+    exactMatchTerms: {
+      // 默认补充的“日常 / 休闲”不参与精确匹配，避免模糊需求触发奖励
+      occasions: normalizeTerms([...occasionKeywords, ...(structuredTerms?.occasions ?? [])]),
+      styles: normalizeTerms([...styleHints, ...(structuredTerms?.styles ?? [])]),
+    },
   };
 }
 
@@ -104,7 +153,9 @@ export function scoreOccasionMatch(
     ...(item.occasion_tags ?? []),
     ...(item.style_tags ?? []),
   ];
+  // 注意：itemSearchText 不包含自定义标签原文，自定义文本无法通过关键词影响规则 / 天气评分
   const text = itemSearchText(item);
+  const supplemental = getSupplementalCanonicalTags(item);
 
   for (const hint of requirement.occasionHints) {
     const tagHit = itemTags.some(
@@ -118,6 +169,12 @@ export function scoreOccasionMatch(
     } else if (textHit) {
       score += 8;
       reasons.push(`场合语义匹配：${hint}`);
+    } else if (
+      supplemental.occasions.some((tag) => tag.includes(hint) || hint.includes(tag)) ||
+      supplemental.styles.some((tag) => tag.includes(hint) || hint.includes(tag))
+    ) {
+      score += CUSTOM_CANONICAL_BONUS;
+      reasons.push(`自定义标签映射：${hint}`);
     }
   }
 
@@ -134,10 +191,14 @@ export function scoreStyleMatch(
   const itemStyles = item.style_tags ?? [];
   const text = itemSearchText(item);
 
+  const supplementalStyles = getSupplementalCanonicalTags(item).styles as string[];
   for (const hint of requirement.styleHints) {
     if (itemStyles.includes(hint) || text.includes(hint.toLowerCase())) {
       score += 10;
       reasons.push(`风格需求匹配：${hint}`);
+    } else if (supplementalStyles.includes(hint)) {
+      score += CUSTOM_CANONICAL_BONUS;
+      reasons.push(`自定义风格映射：${hint}`);
     }
   }
 
@@ -327,7 +388,16 @@ export function scoreClosetItem(
     ),
   };
 
+  // 精确自定义标签奖励：加在规则分上，发生在 pickBalancedCandidates 截断之前；
+  // 天气冲突（weather < 50）时不发放，避免仅凭自定义标签把不适合天气的单品推到前面。
+  const customTag = computeCustomTagBonus(item, context.requirement, weather.score);
+  const customTagReasons: string[] = [];
+  if (customTag.customTagBonus > 0) {
+    customTagReasons.push(`自定义标签精确匹配 +${customTag.customTagBonus}`);
+  }
+
   const matchedReasons = [
+    ...customTagReasons,
     ...occasion.reasons,
     ...style.reasons,
     ...weather.reasons,
@@ -335,10 +405,15 @@ export function scoreClosetItem(
     ...userPreference.reasons,
   ].slice(0, 6);
 
+  const hasCustomMatch =
+    customTag.exactCustomOccasionMatches.length > 0 || customTag.exactCustomStyleMatches.length > 0;
+
   return {
     item,
-    ruleScore: breakdown.total,
+    // breakdown.total 保持原口径（0–100）；排序分 = 原规则分 + 有上限的奖励
+    ruleScore: breakdown.total + customTag.customTagBonus,
     matchedReasons,
     breakdown,
+    ...(hasCustomMatch ? { customTag: { ...customTag, baseRuleScore: breakdown.total } } : {}),
   };
 }

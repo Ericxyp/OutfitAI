@@ -6,7 +6,10 @@ import type { Database } from "@/types/database";
 import type {
   RecommendationContext,
   RecommendationRequirement,
+  RequirementMatchTerms,
+  RetrievalDebugScore,
   RetrievalResult,
+  ScoredClosetItem,
 } from "@/types/recommendation";
 import type { WeatherContext } from "@/types/weather";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -23,8 +26,16 @@ import {
 const FULL_CLOSET_THRESHOLD = 20;
 const MIN_CANDIDATES = 8;
 const MAX_CANDIDATES = 20;
-const RULE_SCORE_WEIGHT = 0.7;
-const EMBEDDING_SCORE_WEIGHT = 30;
+/**
+ * 混合排序权重：hybrid = rule × 0.8 + (similarity × 100) × 0.2
+ * - 规则（系统标签 / 天气 / 画像 / 颜色）占主导，语义（含自定义标签）只做补召回与软排序；
+ * - 原为 0.7 / 30（语义约 30%），本次小幅下调到 20%。
+ */
+export const RULE_SCORE_WEIGHT = 0.8;
+export const SEMANTIC_SCORE_WEIGHT = 0.2;
+/** 天气不适配（天气分低于中性分）的单品，语义加分减半，避免自定义描述压过天气规则 */
+const WEATHER_PENALIZED_SEMANTIC_FACTOR = 0.5;
+const NEUTRAL_WEATHER_SCORE = 50;
 const DEFAULT_EMBEDDING_MATCH_COUNT = 12;
 
 export type RetrieveClosetCandidatesInput = {
@@ -32,6 +43,8 @@ export type RetrieveClosetCandidatesInput = {
   requestText: string;
   weatherContext: WeatherContext | null;
   styleProfile: StyleProfileContext | null;
+  /** 需求确认 Agent 的结构化场景 / 风格词（已在服务端清洗），用于精确自定义标签匹配 */
+  requirementTerms?: RequirementMatchTerms | null;
 };
 
 export type EmbeddingClosetCandidate = {
@@ -61,7 +74,36 @@ function buildRetrievalReason(
   return `从 ${totalCount} 件中${retrievalMode} ${candidateCount} 件候选；场合：${occasion}；风格：${style}`;
 }
 
-function filterEligibleItems(
+/** 每个候选的服务端调试信息：只含数量与分数，不含标签原文 */
+function buildDebugScore(
+  scored: ScoredClosetItem,
+  extra: { ruleScore: number; semanticScore: number; sources: Array<"rule" | "embedding"> }
+): RetrievalDebugScore {
+  return {
+    itemId: scored.item.id.slice(0, 8),
+    name: scored.item.name ?? "未命名",
+    category: scored.item.category ?? "未知",
+    total: scored.ruleScore,
+    ruleScore: extra.ruleScore,
+    semanticScore: extra.semanticScore,
+    sources: extra.sources,
+    exactCustomOccasionMatches: scored.customTag?.exactCustomOccasionMatches.length ?? 0,
+    exactCustomStyleMatches: scored.customTag?.exactCustomStyleMatches.length ?? 0,
+    customTagBonus: scored.customTag?.customTagBonus ?? 0,
+    finalScore: scored.ruleScore,
+  };
+}
+
+/** 去掉精确自定义标签奖励后的规则分 */
+function getBaseRuleScore(scored: ScoredClosetItem): number {
+  return scored.ruleScore - (scored.customTag?.customTagBonus ?? 0);
+}
+
+/**
+ * 硬过滤：用户明确不喜欢的单品不进入任何候选（规则、语义、fallback 均适用）。
+ * 自定义标签不会影响此过滤。
+ */
+export function filterEligibleItems(
   closetItems: ClosetItem[],
   styleProfile: StyleProfileContext | null
 ): ClosetItem[] {
@@ -84,7 +126,7 @@ export function retrieveClosetCandidates(
     hasStyleProfile: styleProfile !== null && styleProfile.feedbackCount > 0,
   });
 
-  const requirement = parseRecommendationRequirement(requestText);
+  const requirement = parseRecommendationRequirement(requestText, input.requirementTerms);
   const eligibleItems = filterEligibleItems(closetItems, styleProfile);
 
   const scoreContext = {
@@ -122,12 +164,9 @@ export function retrieveClosetCandidates(
     ...categoryCoverage,
   });
 
-  const debugScores = picked.map((scored) => ({
-    itemId: scored.item.id.slice(0, 8),
-    name: scored.item.name ?? "未命名",
-    category: scored.item.category ?? "未知",
-    total: scored.ruleScore,
-  }));
+  const debugScores = picked.map((scored) =>
+    buildDebugScore(scored, { ruleScore: getBaseRuleScore(scored), semanticScore: 0, sources: ["rule"] })
+  );
 
   return {
     candidateItems,
@@ -210,7 +249,7 @@ export function mergeHybridClosetRetrieval(
     return ruleRetrieval;
   }
 
-  const requirement = parseRecommendationRequirement(input.requestText);
+  const requirement = parseRecommendationRequirement(input.requestText, input.requirementTerms);
   const scoreContext = {
     requirement,
     weatherContext: input.weatherContext,
@@ -220,6 +259,10 @@ export function mergeHybridClosetRetrieval(
   const ruleById = new Map(
     ruleRetrieval.scoredItems.map((scored) => [scored.item.id, scored])
   );
+  const hybridDebug = new Map<
+    string,
+    { ruleScore: number; semanticScore: number; sources: Array<"rule" | "embedding"> }
+  >();
   const embeddingById = new Map(
     embeddingCandidates.map((candidate) => [candidate.item.id, candidate])
   );
@@ -229,35 +272,51 @@ export function mergeHybridClosetRetrieval(
     ...embeddingById.keys(),
   ]);
 
+  const eligibleIds = new Set(
+    filterEligibleItems(input.closetItems, input.styleProfile).map((item) => item.id)
+  );
+
   const hybridScored = rankClosetItems(
-    [...allItemIds].map((itemId) => {
-      const ruleScored = ruleById.get(itemId);
-      const embeddingCandidate = embeddingById.get(itemId);
-      const item = ruleScored?.item ?? embeddingCandidate!.item;
-      const ruleScore = ruleScored?.ruleScore ?? 0;
-      const embeddingSimilarity = embeddingCandidate?.embeddingSimilarity ?? 0;
-      const hybridScore =
-        ruleScore * RULE_SCORE_WEIGHT +
-        embeddingSimilarity * EMBEDDING_SCORE_WEIGHT;
+    [...allItemIds]
+      // 语义召回不能让硬排除单品重新进入候选
+      .filter((itemId) => eligibleIds.has(itemId))
+      .map((itemId) => {
+        const ruleScored = ruleById.get(itemId);
+        const embeddingCandidate = embeddingById.get(itemId);
+        const item = ruleScored?.item ?? embeddingCandidate!.item;
+        // 纯语义召回的单品同样计算完整规则分（含天气），不再按 0 分处理
+        const baseScored = ruleScored ?? scoreClosetItem(item, scoreContext);
+        // 精确自定义标签奖励不参与 0.8 缩放，以原值加在融合分上（仍发生在截断之前）
+        const customTagBonus = baseScored.customTag?.customTagBonus ?? 0;
+        const ruleScore = getBaseRuleScore(baseScored);
+        const similarity = Math.max(0, Math.min(1, embeddingCandidate?.embeddingSimilarity ?? 0));
+        const weatherFactor =
+          baseScored.breakdown.weather < NEUTRAL_WEATHER_SCORE ? WEATHER_PENALIZED_SEMANTIC_FACTOR : 1;
+        const semanticScore = similarity * 100 * weatherFactor;
+        const hybridScore =
+          ruleScore * RULE_SCORE_WEIGHT + semanticScore * SEMANTIC_SCORE_WEIGHT + customTagBonus;
 
-      const baseScored =
-        ruleScored ?? scoreClosetItem(item, scoreContext);
-
-      return {
-        ...baseScored,
-        ruleScore: hybridScore,
-        matchedReasons: embeddingCandidate
-          ? [
-              ...baseScored.matchedReasons,
-              "embedding 语义召回",
-            ]
-          : baseScored.matchedReasons,
-        breakdown: {
-          ...baseScored.breakdown,
-          total: hybridScore,
-        },
-      };
-    })
+        const scored: ScoredClosetItem = {
+          ...baseScored,
+          ruleScore: hybridScore,
+          matchedReasons: embeddingCandidate
+            ? [...baseScored.matchedReasons, "embedding 语义召回"]
+            : baseScored.matchedReasons,
+          breakdown: {
+            ...baseScored.breakdown,
+            total: hybridScore,
+          },
+        };
+        hybridDebug.set(itemId, {
+          ruleScore,
+          semanticScore,
+          sources: [
+            ...(ruleScored ? (["rule"] as const) : []),
+            ...(embeddingCandidate ? (["embedding"] as const) : []),
+          ],
+        });
+        return scored;
+      })
   );
 
   const useFullCloset = input.closetItems.length <= FULL_CLOSET_THRESHOLD;
@@ -280,12 +339,14 @@ export function mergeHybridClosetRetrieval(
       useFullCloset,
       true
     ),
-    debugScores: picked.map((scored) => ({
-      itemId: scored.item.id.slice(0, 8),
-      name: scored.item.name ?? "未命名",
-      category: scored.item.category ?? "未知",
-      total: scored.ruleScore,
-    })),
+    debugScores: picked.map((scored) => {
+      const debug = hybridDebug.get(scored.item.id);
+      return buildDebugScore(scored, {
+        ruleScore: debug?.ruleScore ?? getBaseRuleScore(scored),
+        semanticScore: debug?.semanticScore ?? 0,
+        sources: debug?.sources ?? ["rule"],
+      });
+    }),
     categoryCoverage: getCategoryCoverage(picked),
     usedFallback: false,
     usedEmbeddingRetrieval: true,
@@ -300,12 +361,14 @@ export async function retrieveClosetCandidatesHybridSafe(input: {
   requestText: string;
   weatherContext: WeatherContext | null;
   styleProfile: StyleProfileContext | null;
+  requirementTerms?: RequirementMatchTerms | null;
 }): Promise<RetrievalResult> {
   const retrievalInput: RetrieveClosetCandidatesInput = {
     closetItems: input.closetItems,
     requestText: input.requestText,
     weatherContext: input.weatherContext,
     styleProfile: input.styleProfile,
+    requirementTerms: input.requirementTerms,
   };
 
   const ruleRetrieval = retrieveClosetCandidatesSafe(retrievalInput);
@@ -366,13 +429,15 @@ export function retrieveClosetCandidatesSafe(
       errorMessage: errorMessage.slice(0, 200),
     });
 
+    // fallback 同样执行硬过滤：明确不喜欢的单品不能重新进入
+    const eligibleItems = filterEligibleItems(input.closetItems, input.styleProfile);
     return {
-      candidateItems: input.closetItems,
+      candidateItems: eligibleItems,
       scoredItems: [],
       retrievalReason: "规则召回失败，已回退到全量衣橱",
       debugScores: [],
       categoryCoverage: getCategoryCoverage(
-        input.closetItems.map((item) => ({
+        eligibleItems.map((item) => ({
           item,
           ruleScore: 0,
           matchedReasons: [],

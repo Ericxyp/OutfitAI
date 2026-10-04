@@ -2,6 +2,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { createClient } from "@supabase/supabase-js";
 import { upsertClosetItemEmbedding } from "@/lib/closet/upsert-closet-embedding";
+import { buildClosetItemEmbeddingText } from "@/lib/recommendation/embedding-text";
 import type { ClosetItem, Database } from "@/types/database";
 
 function loadEnvLocal() {
@@ -59,20 +60,27 @@ async function main() {
   const limit = Number(process.env.BACKFILL_LIMIT ?? 50);
   const supabase = createClient<Database>(supabaseUrl, serviceRoleKey);
 
-  const { data, error } = await supabase
+  // BACKFILL_MODE=stale：重算 embedding_text 与当前构造规则不一致的衣物
+  // （例如编辑自定义标签时 Embedding 生成失败留下的旧向量）。默认只补全缺失的 embedding。
+  const staleMode = process.env.BACKFILL_MODE === "stale";
+  const safeLimit = Number.isFinite(limit) && limit > 0 ? limit : 50;
+
+  let query = supabase
     .from("closet_items")
     .select("*")
     .eq("status", "ready")
-    .is("embedding", null)
-    .order("created_at", { ascending: true })
-    .limit(Number.isFinite(limit) && limit > 0 ? limit : 50);
+    .order("created_at", { ascending: true });
+  if (!staleMode) query = query.is("embedding", null);
+  const { data, error } = await query.limit(staleMode ? 1000 : safeLimit);
 
   if (error) {
     console.error("[backfill-closet-embeddings] query failed:", error.message);
     process.exit(1);
   }
 
-  const items = (data ?? []) as ClosetItem[];
+  const items = ((data ?? []) as ClosetItem[])
+    .filter((item) => !staleMode || item.embedding_text !== buildClosetItemEmbeddingText(item))
+    .slice(0, safeLimit);
   if (items.length === 0) {
     console.log("[backfill-closet-embeddings] no items need backfill");
     return;

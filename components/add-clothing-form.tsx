@@ -25,10 +25,15 @@ const EMPTY_FORM: ClosetItemFormValues = {
   style_tags: [],
   season_tags: [],
   occasion_tags: [],
+  custom_style_tags: [],
+  custom_occasion_tags: [],
   notes: "",
 };
 
-function analysisToFormValues(data: ClothingAnalysis): ClosetItemFormValues {
+function analysisToFormValues(
+  data: ClothingAnalysis,
+  previous: ClosetItemFormValues
+): ClosetItemFormValues {
   return {
     name: data.name,
     category: data.category,
@@ -37,6 +42,9 @@ function analysisToFormValues(data: ClothingAnalysis): ClosetItemFormValues {
     style_tags: data.style_tags,
     season_tags: data.season_tags,
     occasion_tags: data.occasion_tags,
+    // AI 不生成自定义标签；保留用户已手动添加的内容
+    custom_style_tags: previous.custom_style_tags,
+    custom_occasion_tags: previous.custom_occasion_tags,
     notes: data.notes,
   };
 }
@@ -119,7 +127,7 @@ export function AddClothingForm({ options }: { options: ClothingOptions }) {
       }
 
       setIsNonClothing(false);
-      setFormValues(analysisToFormValues(result.data));
+      setFormValues((previous) => analysisToFormValues(result.data, previous));
       setAiStatus(PAGE_COPY.addClothing.aiSuccess);
     } catch (error) {
       console.error("handleAiRecognize error:", error);

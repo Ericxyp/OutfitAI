@@ -96,6 +96,22 @@ Server Action → Workflow → Services / AI / Supabase
 | 9. 持久化 | Supabase | 写入 `outfit_recommendations` |
 | 10. 埋点 | `trackEvent` | 写入 `event_logs`（失败不阻断） |
 
+### 需求确认 Agent（首页对话，生成前）
+
+首页用户消息不再直接调用推荐生成，而是先经过受控的需求确认流程（`lib/requirements/`、`lib/actions/requirement.ts`）：
+
+```
+用户输入 → 结构化提取（Qwen JSON 输出，校验失败修复重试 1 次，再失败降级关键词解析）
+→ 运行时 Schema 校验 → 结合首页位置 / 天气 / 衣橱补全 → 程序业务校验（日期、地点、枚举、衣物归属）
+→ 必要时追问（每轮 ≤2 问，最多 2 轮）→ 需求确认卡 → 用户确认 → runOutfitWorkflow
+```
+
+- 关键字段：场景、日期、可查天气的位置；可选字段缺失不追问，未指定日期按“今天”并在确认卡中展示为假设。
+- 模型只做语义理解；日期由程序在用户时区内计算，地点必须通过天气接口验证，衣物 ID 只在服务端按当前用户衣橱匹配。
+- 确认后复用现有推荐工作流：结构化字段拼入 `requestText`（命中规则召回关键词），不喜欢的风格 / 特殊需求 / 假设通过 `requirementNotes` 只进入最终提示词，`targetDate` 用于按日期取预报，`excludeClosetItemIds` 只在当前用户衣橱内过滤。
+- 草稿保存在 `sessionStorage`（按 user.id 隔离、版本号、30 分钟有效），刷新可恢复稳定状态；进行中的请求不恢复。
+- 测试：`npm run test:requirement-agent`（模型 / 天气 / 工作流全部 mock）。
+
 旅行规划（`/travel`）与购物助手（`/shopping`）沿用相同「Workflow + Qwen + Supabase」模式，但 **RAG 知识尚未完全接入**（代码中已预留 TODO）。
 
 ---
@@ -109,6 +125,16 @@ Server Action → Workflow → Services / AI / Supabase
 | 规则召回 | 过滤不喜欢单品、按场景/天气/偏好打分 |
 | Ranking | 平衡类别覆盖（上装/下装/外套/鞋等），控制候选规模 |
 | LLM | 在候选集内做最终组合与自然语言解释 |
+
+### 自定义风格 / 场景标签
+
+衣物除系统标签（`style_tags` / `occasion_tags`）外，可添加用户自定义的 `custom_style_tags` / `custom_occasion_tags`（每类最多 5 个，每个 2~12 字，`lib/closet/custom-tags.ts` 统一校验）。
+
+- 系统标签负责确定性规则评分；自定义标签只进入衣物 Embedding 文本、最终模型的 JSON 上下文和界面展示。
+- 可靠的同义词（如“极简风→简约”“音乐节→聚会”）通过确定性别名表映射为系统标签，只在规则评分中提供 +4 的弱补充，不写回系统标签。
+- 混合排序：`rule × 0.8 + similarity × 100 × 0.2`；天气不适配的单品语义分减半；硬排除（不喜欢 / 本次排除）对规则、语义和 fallback 一律生效。
+- 迁移：`supabase/migrations/20261003_closet_custom_tags.sql`（默认空数组，沿用原 RLS）。
+- 测试：`npm run test:custom-tags`、`npm run eval:custom-tags`、`npm run test:e2e:custom-tags`。
 
 ### 为什么这样设计
 
@@ -194,6 +220,8 @@ npm run test:style-knowledge
 | `/profile/metrics` | 产品数据页 |
 
 ### 已埋点事件
+
+需求确认：`requirement_extraction_started`、`requirement_extraction_succeeded`、`requirement_extraction_failed`、`requirement_clarification_requested`、`requirement_clarification_answered`、`requirement_confirmation_shown`、`requirement_confirmed`、`requirement_modified`、`requirement_cancelled`、`requirement_fallback_used`（metadata 仅含枚举 / 数字，不含原文）。
 
 `closet_item_created`、`closet_item_failed`、`outfit_generated`、`recommendation_failed`、`feedback_submitted`、`feedback_failed`、`travel_plan_generated`、`travel_plan_failed`、`shopping_check_generated`、`shopping_check_failed`、`personal_profile_saved`、`personal_profile_failed`、`style_profile_updated`、`style_profile_failed`
 

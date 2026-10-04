@@ -12,7 +12,15 @@ import {
 } from "@/lib/closet/clothing-gate";
 import { trackEvent } from "@/lib/analytics/track-event";
 import { trackFailureEvent } from "@/lib/analytics/track-failure";
-import { upsertClosetItemEmbedding } from "@/lib/closet/upsert-closet-embedding";
+import {
+  getMissingCustomTagColumnsMessage,
+  isMissingCustomTagColumnsError,
+  refreshClosetItemEmbedding,
+  updateOwnedClosetItem,
+} from "@/lib/closet/closet-persistence";
+import { normalizeCustomTagList } from "@/lib/closet/custom-tags";
+import { trackCustomTagChange } from "@/lib/closet/custom-tag-events";
+import { validateClosetItemFormValues } from "@/lib/closet/form-validation";
 import { CLOSET_STORAGE_BUCKET, PAGE_COPY } from "@/lib/constants";
 import { createClient } from "@/lib/supabase/server";
 import type { ClothingAnalysis } from "@/types/closet";
@@ -159,6 +167,9 @@ export async function createClosetItem(
   const styleTags = formData.getAll("style_tags").map(String);
   const seasonTags = formData.getAll("season_tags").map(String);
   const occasionTags = formData.getAll("occasion_tags").map(String);
+  // 自定义标签：服务端重新校验；非法条目被丢弃，不影响其余字段保存
+  const customStyle = normalizeCustomTagList(formData.getAll("custom_style_tags").map(String), "style");
+  const customOccasion = normalizeCustomTagList(formData.getAll("custom_occasion_tags").map(String), "occasion");
 
   const fileExt = image.name.split(".").pop()?.toLowerCase() || "jpg";
   const filePath = `${user.id}/${crypto.randomUUID()}.${fileExt}`;
@@ -214,6 +225,8 @@ export async function createClosetItem(
       style_tags: styleTags,
       season_tags: seasonTags,
       occasion_tags: occasionTags,
+      custom_style_tags: customStyle.tags,
+      custom_occasion_tags: customOccasion.tags,
       notes,
       status: "ready",
     })
@@ -222,6 +235,10 @@ export async function createClosetItem(
 
   if (error || !data) {
     await supabase.storage.from(CLOSET_STORAGE_BUCKET).remove([filePath]);
+    if (isMissingCustomTagColumnsError(error)) {
+      console.error("[closet] custom tag columns missing, run migration");
+      return { error: getMissingCustomTagColumnsMessage() };
+    }
     await trackFailureEvent({
       userId: user.id,
       eventName: "closet_item_failed",
@@ -232,11 +249,17 @@ export async function createClosetItem(
     return { error: "保存失败，请稍后重试" };
   }
 
-  try {
-    await upsertClosetItemEmbedding(supabase, data);
-  } catch (embeddingError) {
-    console.warn("[closet] embedding update skipped:", embeddingError);
-  }
+  const embeddingUpdated = await refreshClosetItemEmbedding(supabase, data);
+  await trackCustomTagChange({
+    userId: user.id,
+    itemId: data.id,
+    source: "single",
+    previousCount: 0,
+    customStyleTags: customStyle.tags,
+    customOccasionTags: customOccasion.tags,
+    embeddingUpdated,
+    validationErrorType: customStyle.firstError ?? customOccasion.firstError,
+  });
 
   await trackEvent({
     userId: user.id,
@@ -252,6 +275,78 @@ export async function createClosetItem(
   revalidatePath("/closet");
   revalidatePath("/profile");
   redirect(`/closet/${data.id}`);
+}
+
+const CLOSET_ITEM_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * 编辑衣物（含自定义标签）。只能编辑当前登录用户自己的衣物；
+ * 保存后重新生成 Embedding（失败不影响保存）。
+ */
+export async function updateClosetItem(
+  _prevState: ClosetActionState,
+  formData: FormData
+): Promise<ClosetActionState> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    return { error: "请先登录" };
+  }
+
+  const itemId = formData.get("id")?.toString() ?? "";
+  if (!CLOSET_ITEM_ID_PATTERN.test(itemId)) {
+    return { error: "衣物不存在或无权编辑" };
+  }
+
+  const validation = validateClosetItemFormValues({
+    name: formData.get("name")?.toString(),
+    category: formData.get("category")?.toString(),
+    color: formData.get("color")?.toString(),
+    material: formData.get("material")?.toString(),
+    notes: formData.get("notes")?.toString(),
+    style_tags: formData.getAll("style_tags").map(String),
+    season_tags: formData.getAll("season_tags").map(String),
+    occasion_tags: formData.getAll("occasion_tags").map(String),
+    custom_style_tags: formData.getAll("custom_style_tags").map(String),
+    custom_occasion_tags: formData.getAll("custom_occasion_tags").map(String),
+  });
+
+  if (!validation.ok) {
+    return { error: validation.error };
+  }
+
+  const result = await updateOwnedClosetItem(supabase, {
+    userId: user.id,
+    itemId,
+    values: validation.values,
+  });
+
+  if (!result.ok) {
+    return { error: result.error };
+  }
+
+  // 自定义标签增删都会改变 Embedding 文本，统一重新生成
+  const embeddingUpdated = await refreshClosetItemEmbedding(supabase, result.item);
+  const previousCount =
+    (result.previous.custom_style_tags?.length ?? 0) +
+    (result.previous.custom_occasion_tags?.length ?? 0);
+  await trackCustomTagChange({
+    userId: user.id,
+    itemId,
+    source: "edit",
+    previousCount,
+    customStyleTags: validation.values.custom_style_tags,
+    customOccasionTags: validation.values.custom_occasion_tags,
+    embeddingUpdated,
+    validationErrorType: validation.customTagErrorType,
+  });
+
+  revalidatePath("/closet");
+  revalidatePath(`/closet/${itemId}`);
+  redirect(`/closet/${itemId}`);
 }
 
 export async function deleteClosetItem(

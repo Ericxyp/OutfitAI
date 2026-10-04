@@ -56,10 +56,17 @@ export async function generateRecommendation(
 export async function regenerateRecommendation(
   requestText: string,
   previousItemIds: string[],
-  options?: Pick<GenerateRecommendationOptions, "location">
+  options?: Pick<
+    GenerateRecommendationOptions,
+    "location" | "targetDate" | "excludeClosetItemIds" | "requirementNotes" | "requirementTerms"
+  >
 ): Promise<GenerateRecommendationResponse> {
   return generateRecommendation(requestText, {
     excludeItemIds: previousItemIds,
     location: options?.location,
+    targetDate: options?.targetDate,
+    excludeClosetItemIds: options?.excludeClosetItemIds,
+    requirementNotes: options?.requirementNotes,
+    requirementTerms: options?.requirementTerms,
   });
 }

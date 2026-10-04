@@ -53,4 +53,24 @@ export type GenerateRecommendationOptions = {
   excludeItemIds?: string[];
   /** 新格式为 WeatherLocationInput；仍兼容旧版 { latitude, longitude } */
   location?: WeatherLocationInput | LocationInput;
+  /**
+   * 用户确认的目标日期（YYYY-MM-DD）。提供时按该日期查询天气（今天=实时，未来=预报）；
+   * 不提供时保持原有实时天气行为。
+   */
+  targetDate?: string;
+  /**
+   * 用户明确排除的衣橱单品。工作流只会在当前用户自己的衣橱中过滤，
+   * 不在衣橱中的 ID 会被忽略。
+   */
+  excludeClosetItemIds?: string[];
+  /**
+   * 需求确认 Agent 生成的补充说明（不喜欢的风格、特殊需求、系统假设等），
+   * 只追加到最终 AI 提示词中，不参与规则关键词匹配，避免“不要太正式”被误判为“正式”。
+   */
+  requirementNotes?: string;
+  /**
+   * 需求确认 Agent 已解析的场景 / 风格词，只用于“精确自定义标签匹配奖励”。
+   * 服务端会按自定义标签同一规则重新清洗，非法内容丢弃。
+   */
+  requirementTerms?: { occasions?: string[]; styles?: string[] };
 };

@@ -27,5 +27,9 @@ export interface ClosetItemFormValues {
   style_tags: string[];
   season_tags: string[];
   occasion_tags: string[];
+  /** 用户自定义风格（不进入系统标签数组，只做语义补充） */
+  custom_style_tags: string[];
+  /** 用户自定义场景 */
+  custom_occasion_tags: string[];
   notes: string;
 }

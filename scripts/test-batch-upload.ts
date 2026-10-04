@@ -208,6 +208,8 @@ async function testSaveFailureKeepsAnalysis() {
     style_tags: ["通勤"],
     season_tags: ["春"],
     occasion_tags: ["上班"],
+    custom_style_tags: ["法式松弛感"],
+    custom_occasion_tags: [],
     notes: "保留",
   };
   const afterFail: BatchUploadItem = {
@@ -233,6 +235,7 @@ async function testSaveFailureKeepsAnalysis() {
     },
   };
   assert(afterFail.formValues?.name === "外套", "keeps edited name");
+  assert(afterFail.formValues?.custom_style_tags[0] === "法式松弛感", "keeps custom tags");
   assert(afterFail.analysis?.is_clothing === true, "keeps analysis");
   console.log("[PASS] save failure retains analysis and edits");
 }

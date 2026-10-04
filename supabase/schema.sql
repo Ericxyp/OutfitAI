@@ -69,6 +69,25 @@ alter table if exists public.closet_items
 alter table if exists public.closet_items
   add column if not exists embedding_updated_at timestamptz;
 
+-- 自定义风格 / 场景标签（见 migrations/20261003_closet_custom_tags.sql）
+alter table if exists public.closet_items
+  add column if not exists custom_style_tags text[] not null default '{}';
+
+alter table if exists public.closet_items
+  add column if not exists custom_occasion_tags text[] not null default '{}';
+
+alter table public.closet_items
+  drop constraint if exists closet_items_custom_style_tags_limit;
+alter table public.closet_items
+  add constraint closet_items_custom_style_tags_limit
+  check (cardinality(custom_style_tags) <= 5);
+
+alter table public.closet_items
+  drop constraint if exists closet_items_custom_occasion_tags_limit;
+alter table public.closet_items
+  add constraint closet_items_custom_occasion_tags_limit
+  check (cardinality(custom_occasion_tags) <= 5);
+
 alter table public.closet_items enable row level security;
 
 drop policy if exists "closet_items_select_own" on public.closet_items;
