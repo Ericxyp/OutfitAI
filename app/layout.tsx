@@ -25,14 +25,27 @@ export const viewport: Viewport = {
 
 /** 服务端读取当前登录用户的 id（只传 id 给客户端，用于本地存储按账号隔离） */
 async function getCurrentUserId(): Promise<string | null> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+
   try {
     const supabase = await createClient();
+    const result = await Promise.race([
+      supabase.auth.getUser(),
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error("Supabase auth request timed out")),
+          1_500
+        );
+      }),
+    ]);
     const {
       data: { user },
-    } = await supabase.auth.getUser();
+    } = result;
     return user?.id ?? null;
   } catch {
     return null;
+  } finally {
+    if (timeout) clearTimeout(timeout);
   }
 }
 

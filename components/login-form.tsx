@@ -11,6 +11,7 @@ const MIN_PASSWORD_LENGTH = 8;
 const URL_ERROR_MESSAGES: Record<string, string> = {
   auth_callback_failed: "登录链接已失效或已使用，请返回登录页重新登录。",
   otp_verify_failed: "登录链接验证失败，请返回登录页重新登录。",
+  auth_unavailable: "登录服务暂时不可用，请稍后再试。公开页面仍可正常浏览。",
 };
 
 type AuthMode = "login" | "signup";
